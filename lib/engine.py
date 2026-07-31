@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+import time
+
 from language import detect_language
 
 Lang = str  # "ru" | "en" | "auto"
@@ -28,6 +30,16 @@ class EngineUnavailableError(EngineError):
 
 
 @dataclass(frozen=True)
+class Timings:
+    """Длительности проходов движка, замеренные внутри шва.
+
+    diar_s is None ⟺ диаризация не выполнялась.
+    """
+    asr_s: float = 0.0
+    diar_s: float | None = None
+
+
+@dataclass(frozen=True)
 class Transcript:
     words: list = field(default_factory=list)        # [{"start", "end", "text"}]
     segments: list = field(default_factory=list)     # [(start, end, "S<n>", quality)]
@@ -35,6 +47,8 @@ class Transcript:
     language: str = "auto"
     text: str = ""
     engine: str = ""
+    timings: Timings = field(default_factory=Timings)
+    diar_mode: str | None = None
 
 
 class FluidAudioEngine:
@@ -52,16 +66,23 @@ class FluidAudioEngine:
                    on_stage: Optional[Callable[[str], None]] = None) -> Transcript:
         if on_stage:
             on_stage("asr")
+        t0_asr = time.time()
         asr_data = self._run_transcribe(wav, lang)
+        asr_s = time.time() - t0_asr
         words = _normalize_words(asr_data)
         if not words:
             raise EngineError("asr", "ASR вернул пустой результат")
 
         segments = []
+        diar_s = None
+        diar_run = False
         if speakers != "off":
             if on_stage:
                 on_stage("diar")
+            t0_diar = time.time()
             diar_data = self._run_process(wav, _num(speakers))
+            diar_s = time.time() - t0_diar
+            diar_run = True
             segments, n_speakers = _normalize_diar(diar_data)
         else:
             n_speakers = 0
@@ -74,7 +95,9 @@ class FluidAudioEngine:
 
         return Transcript(words=words, segments=segments, speakers=n_speakers,
                           language=lang_out, text=asr_data.get("text") or "",
-                          engine=engine)
+                          engine=engine,
+                          timings=Timings(asr_s=asr_s, diar_s=diar_s),
+                          diar_mode=(self.diar_mode if diar_run else None))
 
     def _run_transcribe(self, wav: Path, lang: str) -> dict:
         out_json = _tmp_json("asr")

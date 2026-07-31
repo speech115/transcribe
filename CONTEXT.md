@@ -40,6 +40,10 @@ _Avoid_: разделение, сегментация
 Метка ru | en | mixed | auto, разрешаемая цепочкой: явный аргумент > ответ движка > эвристика по тексту.
 _Avoid_: локаль, locale
 
+### Стадия (stage)
+Этап прогона, видимый в progress.json: prep (конвертация), asr, diar, merge. Стадии asr/diar объявляет движок через live-канал; prep/merge — владелец прогона.
+_Avoid_: фаза, шаг, пайплайн-статус
+
 ### Артефакты (artifacts)
 Выход прогона: transcript.md, transcript.json, manifest.json, progress.json.
 _Avoid_: выходные файлы, результаты

@@ -263,8 +263,6 @@ def _ENGINE_FACTORY(binary: Path, model: str, diar_mode: str) -> FluidAudioEngin
 class _Tracker:
     """Live-трейсинг прогона в progress.json. Терминальный статус липкий."""
 
-    STAGES = ("prep", "asr", "diar", "merge")
-
     def __init__(self, path: Path, source: str):
         self.path = path
         self.state = {
@@ -404,19 +402,13 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
         timings["prep_s"] = round(time.time() - t0, 1)
         duration = _ffprobe_duration(wav)
 
-        t0 = time.time()
-        progress.set(stage="asr", duration=duration, rtf=_load_last_rtf(out_dir.parent))
+        progress.set(duration=duration, rtf=_load_last_rtf(out_dir.parent))
         engine = _ENGINE_FACTORY(FLUID, asr_model, diar_mode)
-        stage_marks = []
         result = engine.transcribe(wav, lang=lang, speakers=speakers,
-                                   on_stage=lambda s: stage_marks.append((s, time.time())))
-        elapsed = time.time() - t0
-        asr_s = stage_marks[0][1] - t0 if len(stage_marks) > 1 else elapsed
-        timings["asr_s"] = round(asr_s, 1)
-        timings["diar_s"] = (round(elapsed - (stage_marks[1][1] - t0), 1)
-                             if len(stage_marks) > 1 else None)
-        if duration > 0 and timings["asr_s"] > 0:
-            progress.set(rtf=round(duration / timings["asr_s"], 1))
+                                   on_stage=lambda s: progress.set(stage=s))
+        timings["asr_s"] = round(result.timings.asr_s, 1)
+        timings["diar_s"] = (round(result.timings.diar_s, 1)
+                             if result.timings.diar_s is not None else None)
         words = result.words
         n_speakers = max(result.speakers, 1)
         multi = n_speakers > 1
@@ -434,10 +426,11 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
         (out_dir / "transcript.json").write_text(json.dumps(
             {**meta, "turns": turns, "words": words}, ensure_ascii=False, indent=2))
 
-        rtf = round(duration / timings.get("asr_s", 1), 1) if timings.get("asr_s") else None
+        rtf = (round(duration / timings["asr_s"], 1)
+               if duration > 0 and timings["asr_s"] > 0 else None)
         manifest = {**meta, "out_dir": str(out_dir), "timings_s": timings,
                     "asr_rtf": rtf, "asr_model": asr_model,
-                    "diar_mode": (diar_mode if multi or speakers != "off" else None),
+                    "diar_mode": result.diar_mode,
                     "speakers_arg": speakers, "words": len(words), "turns": len(turns),
                     "engine_binary": str(FLUID)}
         (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
@@ -456,8 +449,8 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
     except EngineError as exc:
         progress.finish("error", error=str(exc))
         raise RunError(str(exc)) from exc
-    except Exception:
-        progress.finish("error", error="см. traceback")
+    except Exception as exc:
+        progress.finish("error", error=str(exc))
         raise
     finally:
         if not keep_tmp:

@@ -12,16 +12,19 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 import engine as engine_mod
 import run as run_mod
-from engine import EngineError, Transcript
+from engine import EngineError, Timings, Transcript
 from run import RunError, format_duration, run, status, status_dict, status_line
 
 
 class FakeEngine:
     """Фейковый движок на шве run(): passthrough без subprocess."""
 
-    def __init__(self, *, fail: bool = False, speakers: int = 2):
+    def __init__(self, *, fail: bool = False, speakers: int = 2,
+                 asr_s: float = 1.0, diar_s: float = 1.0):
         self.fail = fail
         self.speakers = speakers
+        self.asr_s = asr_s
+        self.diar_s = diar_s
 
     def transcribe(self, wav, *, lang="auto", speakers="auto", on_stage=None):
         if on_stage:
@@ -32,12 +35,34 @@ class FakeEngine:
                  {"start": 0.6, "end": 1.0, "text": "мир"}]
         if speakers == "off":
             return Transcript(words=words, segments=[], speakers=1,
-                              language="ru", text="привет мир", engine="fake")
+                              language="ru", text="привет мир", engine="fake",
+                              timings=Timings(asr_s=self.asr_s),
+                              diar_mode=None)
         if on_stage:
             on_stage("diar")
         segments = [(0.0, 0.5, "S1", 1.0), (0.6, 1.0, "S2", 1.0)]
         return Transcript(words=words, segments=segments, speakers=2,
-                          language="ru", text="привет мир", engine="fake")
+                          language="ru", text="привет мир", engine="fake",
+                          timings=Timings(asr_s=self.asr_s, diar_s=self.diar_s),
+                          diar_mode="streaming")
+
+
+@contextmanager
+def _spy_stages():
+    """Перехватывает постановки стадий в трекере: записывает их в список."""
+    seen = []
+    orig_set = run_mod._Tracker.set
+
+    def spy(self, **kw):
+        if "stage" in kw:
+            seen.append(kw["stage"])
+        return orig_set(self, **kw)
+
+    run_mod._Tracker.set = spy
+    try:
+        yield seen
+    finally:
+        run_mod._Tracker.set = orig_set
 
 
 @contextmanager
@@ -254,6 +279,27 @@ def test_run_preflight_error_leaves_no_progress():
         assert not (out / "progress.json").exists()
 
 
+def test_unexpected_error_reports_cause_in_progress():
+    with _tmp() as td:
+        src = td / "in.wav"
+        src.write_bytes(b"x" * 100)
+        out = td / "out"
+
+        class BoomEngine(FakeEngine):
+            def transcribe(self, wav, *, lang="auto", speakers="auto", on_stage=None):
+                raise RuntimeError("взрыв на ровном месте")
+
+        with _patch_engine(BoomEngine()), _patch_prep(duration=10.0):
+            try:
+                run(str(src), out=out)
+                raise AssertionError("ожидалось исключение")
+            except RuntimeError:
+                pass
+        progress = json.loads((out / "progress.json").read_text())
+        assert progress["status"] == "error"
+        assert "взрыв на ровном месте" in progress["error"]
+
+
 def test_run_keep_tmp_reports_workdir():
     with _tmp() as td:
         src = td / "in.wav"
@@ -264,6 +310,54 @@ def test_run_keep_tmp_reports_workdir():
             assert res.workdir is not None and res.workdir.exists()
             res2 = run(str(src), out=out, speakers="off")
             assert res2.workdir is None
+
+
+def test_manifest_timings_and_diar_mode_come_from_engine():
+    with _tmp() as td:
+        src = td / "in.wav"
+        src.write_bytes(b"x" * 100)
+        out = td / "out"
+        with _patch_engine(FakeEngine(asr_s=0.5, diar_s=1.5)), _patch_prep(duration=10.0):
+            run(str(src), out=out)
+        manifest = json.loads((out / "manifest.json").read_text())
+        assert manifest["timings_s"]["asr_s"] == 0.5
+        assert manifest["timings_s"]["diar_s"] == 1.5
+        assert manifest["asr_rtf"] == round(10.0 / 0.5, 1)
+        assert manifest["diar_mode"] == "streaming"
+
+
+def test_off_manifest_diar_mode_none():
+    with _tmp() as td:
+        src = td / "in.wav"
+        src.write_bytes(b"x" * 100)
+        out = td / "out"
+        with _patch_engine(FakeEngine()), _patch_prep(duration=10.0):
+            run(str(src), out=out, speakers="off")
+        manifest = json.loads((out / "manifest.json").read_text())
+        assert manifest["timings_s"]["diar_s"] is None
+        assert manifest["diar_mode"] is None
+
+
+def test_progress_sees_all_stages():
+    with _tmp() as td:
+        src = td / "in.wav"
+        src.write_bytes(b"x" * 100)
+        out = td / "out"
+        with _spy_stages() as seen:
+            with _patch_engine(FakeEngine()), _patch_prep(duration=10.0):
+                run(str(src), out=out)
+        assert seen == ["prep", "asr", "diar", "merge"]
+
+
+def test_progress_off_skips_diar_stage():
+    with _tmp() as td:
+        src = td / "in.wav"
+        src.write_bytes(b"x" * 100)
+        out = td / "out"
+        with _spy_stages() as seen:
+            with _patch_engine(FakeEngine()), _patch_prep(duration=10.0):
+                run(str(src), out=out, speakers="off")
+        assert seen == ["prep", "asr", "merge"]
 
 
 if __name__ == "__main__":

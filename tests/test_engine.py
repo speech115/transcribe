@@ -3,6 +3,7 @@
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -55,6 +56,24 @@ def test_off_skips_diarization():
     assert tr.speakers == 1
     assert tr.engine == "fluidaudio-parakeet-v3"
     assert [c[0] for c in engine._runner.calls] == ["transcribe"]
+    assert tr.diar_mode is None
+    assert tr.timings.diar_s is None
+    assert tr.timings.asr_s >= 0
+
+
+def test_auto_reports_timings_and_diar_mode():
+    class SlowRunner(FixtureRunner):
+        def transcribe(self, wav, lang, model, out_json):
+            time.sleep(0.05)
+            super().transcribe(wav, lang, model, out_json)
+
+    engine = FluidAudioEngine(binary=Path("vendor/fluidaudiocli"),
+                              runner=SlowRunner(ASR_V3_EN, DIAR_STREAMING))
+    tr = engine.transcribe(Path("in.wav"))
+
+    assert tr.diar_mode == "streaming"
+    assert tr.timings.asr_s >= 0.04
+    assert tr.timings.diar_s is not None and tr.timings.diar_s >= 0
 
 
 def test_fixed_speakers_passed_to_engine():
