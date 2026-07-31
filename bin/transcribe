@@ -34,7 +34,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
-from language import detect_language  # noqa: E402
+from engine import EngineError, FluidAudioEngine  # noqa: E402
 from merge import merge_words_to_turns  # noqa: E402
 from naming import safe_folder_name, unique_dir  # noqa: E402
 
@@ -96,56 +96,6 @@ def hhmmss(sec: float) -> str:
     h, rem = divmod(sec, 3600)
     m, s = divmod(rem, 60)
     return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
-
-
-def asr(wav: Path, lang: str, model: str, out_json: Path) -> dict:
-    cmd = [str(FLUID), "transcribe", str(wav), "--word-timestamps",
-           "--model-version", model, "--output-json", str(out_json)]
-    if lang != "auto":
-        cmd += ["--language", lang]
-    run(cmd)
-    return json.loads(out_json.read_text())
-
-
-def diarize(wav: Path, mode: str, num: int, out_json: Path) -> dict:
-    cmd = [str(FLUID), "process", str(wav), "--mode", mode, "--output", str(out_json)]
-    if num > 0:
-        cmd += (["--num-clusters", str(num)] if mode == "streaming"
-                else ["--num-speakers", str(num)])
-    run(cmd)
-    return json.loads(out_json.read_text())
-
-
-def normalize_words(asr_data: dict) -> list:
-    words = []
-    for w in asr_data.get("wordTimings", []):
-        words.append({
-            "start": float(w.get("startTime", 0.0)),
-            "end": float(w.get("endTime", 0.0)),
-            "text": w.get("word", ""),
-        })
-    return words
-
-
-def normalize_diar(diar_data: dict) -> tuple:
-    """diar-сегменты -> [(start,end,SpeakerLabel)], с переименованием в стабильные S1..Sn."""
-    raw = []
-    for s in diar_data.get("segments", []):
-        raw.append((
-            float(s.get("startTimeSeconds", 0.0)),
-            float(s.get("endTimeSeconds", 0.0)),
-            str(s.get("speakerId", "")),
-            float(s.get("qualityScore", 1.0)),
-        ))
-    raw.sort(key=lambda t: t[0])
-    label_map, n = {}, 0
-    relabeled = []
-    for st, en, spk, quality in raw:
-        if spk not in label_map:
-            n += 1
-            label_map[spk] = f"S{n}"
-        relabeled.append((st, en, label_map[spk], quality))
-    return relabeled, len(label_map)
 
 
 def render_md(meta: dict, turns: list, multi: bool) -> str:
@@ -388,22 +338,20 @@ def main():
         t0 = time.time()
         progress.set(stage="asr", duration=duration,
                      rtf=load_last_rtf(out_dir.parent))
-        asr_data = asr(wav, args.lang, args.asr_model, workdir / "asr.json")
-        timings["asr_s"] = round(time.time() - t0, 1)
+        engine = FluidAudioEngine(binary=FLUID, model=args.asr_model,
+                                  diar_mode=args.diar_mode)
+        stage_marks = []
+        result = engine.transcribe(wav, lang=args.lang, speakers=args.speakers,
+                                   on_stage=lambda s: stage_marks.append((s, time.time())))
+        elapsed = time.time() - t0
+        asr_s = stage_marks[0][1] - t0 if len(stage_marks) > 1 else elapsed
+        timings["asr_s"] = round(asr_s, 1)
+        timings["diar_s"] = round(elapsed - (stage_marks[1][1] - t0), 1) if len(stage_marks) > 1 else None
         if duration > 0 and timings["asr_s"] > 0:
             progress.set(rtf=round(duration / timings["asr_s"], 1))
-        words = normalize_words(asr_data)
-        if not words:
-            die("ASR вернул пустой результат")
-
-        diar_segs, n_speakers = [], 1
-        if args.speakers != "off":
-            num = int(args.speakers) if args.speakers.isdigit() else -1
-            t0 = time.time()
-            progress.set(stage="diar", duration=duration)
-            diar_data = diarize(wav, args.diar_mode, num, workdir / "diar.json")
-            timings["diar_s"] = round(time.time() - t0, 1)
-            diar_segs, n_speakers = normalize_diar(diar_data)
+        words = result.words
+        diar_segs = result.segments
+        n_speakers = result.speakers
         n_speakers = max(n_speakers, 1)
         multi = n_speakers > 1
 
@@ -411,16 +359,10 @@ def main():
         turns = merge_words_to_turns(words, diar_segs)
 
         generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        detected_lang = detect_language(asr_data.get("text") or " ".join(w["text"] for w in words))
-        engine_lang = asr_data.get("language")
-        if isinstance(engine_lang, str) and engine_lang.lower() == "auto":
-            engine_lang = None
-        lang_out = args.lang if args.lang != "auto" else (engine_lang or detected_lang)
-        engine = (f"fluidaudio-parakeet-{args.asr_model} + "
-                  f"pyannote-{args.diar_mode}" if multi else f"fluidaudio-parakeet-{args.asr_model}")
+        lang_out = result.language
         meta = {"source": (args.input if is_youtube else Path(args.input).name),
                 "duration": duration, "speakers": n_speakers,
-                "language": lang_out, "engine": engine, "generated": generated}
+                "language": lang_out, "engine": result.engine, "generated": generated}
 
         (out_dir / "transcript.md").write_text(render_md(meta, turns, multi))
         (out_dir / "transcript.json").write_text(json.dumps(
@@ -442,6 +384,10 @@ def main():
         print(f"  {out_dir/'transcript.md'}")
         print(f"  {out_dir/'transcript.json'}")
         print(f"  {out_dir/'manifest.json'}")
+    except EngineError as exc:
+        if progress is not None:
+            progress.finish("error", error=str(exc))
+        die(str(exc))
     except SystemExit as exc:
         if progress is not None:
             err = exc.code if isinstance(exc.code, str) else "aborted"

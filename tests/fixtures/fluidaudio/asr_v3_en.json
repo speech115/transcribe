@@ -1,0 +1,246 @@
+{
+  "audioFile" : "\/var\/folders\/g6\/bkgr0_m53v7ddq7pyyzgksgc0000gn\/T\/transcribe_t9l5jrzb\/audio_16k.wav",
+  "confidence" : 0.9400253,
+  "durationSeconds" : 0,
+  "mode" : "batch",
+  "modelVersion" : "v3",
+  "processingTimeSeconds" : 0.3034689426422119,
+  "rtfx" : 0,
+  "text" : "Alright, so here we are, one of the uh elephants. Um cool thing about these guys is that they have really, really, really long um fronts. And that's that's cool. And that's pretty much all there is to say.",
+  "wordTimings" : [
+    {
+      "confidence" : 0.86328125,
+      "endTime" : 1.28,
+      "startTime" : 0.88,
+      "word" : "Alright,"
+    },
+    {
+      "confidence" : 0.9995117,
+      "endTime" : 1.52,
+      "startTime" : 1.28,
+      "word" : "so"
+    },
+    {
+      "confidence" : 1,
+      "endTime" : 1.68,
+      "startTime" : 1.52,
+      "word" : "here"
+    },
+    {
+      "confidence" : 1,
+      "endTime" : 1.8399999999999999,
+      "startTime" : 1.68,
+      "word" : "we"
+    },
+    {
+      "confidence" : 0.8522949,
+      "endTime" : 2,
+      "startTime" : 1.84,
+      "word" : "are,"
+    },
+    {
+      "confidence" : 0.9526367,
+      "endTime" : 2.3200000000000003,
+      "startTime" : 2.16,
+      "word" : "one"
+    },
+    {
+      "confidence" : 0.9995117,
+      "endTime" : 2.48,
+      "startTime" : 2.4,
+      "word" : "of"
+    },
+    {
+      "confidence" : 0.9995117,
+      "endTime" : 2.64,
+      "startTime" : 2.48,
+      "word" : "the"
+    },
+    {
+      "confidence" : 0.90527344,
+      "endTime" : 2.72,
+      "startTime" : 2.64,
+      "word" : "uh"
+    },
+    {
+      "confidence" : 0.9527588,
+      "endTime" : 4,
+      "startTime" : 2.88,
+      "word" : "elephants."
+    },
+    {
+      "confidence" : 0.6191406,
+      "endTime" : 4.4,
+      "startTime" : 4.24,
+      "word" : "Um"
+    },
+    {
+      "confidence" : 0.9765625,
+      "endTime" : 5.28,
+      "startTime" : 4.96,
+      "word" : "cool"
+    },
+    {
+      "confidence" : 0.99780273,
+      "endTime" : 5.680000000000001,
+      "startTime" : 5.28,
+      "word" : "thing"
+    },
+    {
+      "confidence" : 0.9760742,
+      "endTime" : 5.92,
+      "startTime" : 5.68,
+      "word" : "about"
+    },
+    {
+      "confidence" : 0.99902344,
+      "endTime" : 6.08,
+      "startTime" : 5.92,
+      "word" : "these"
+    },
+    {
+      "confidence" : 1,
+      "endTime" : 6.32,
+      "startTime" : 6.08,
+      "word" : "guys"
+    },
+    {
+      "confidence" : 0.85253906,
+      "endTime" : 6.48,
+      "startTime" : 6.4,
+      "word" : "is"
+    },
+    {
+      "confidence" : 0.9980469,
+      "endTime" : 7.2,
+      "startTime" : 7.04,
+      "word" : "that"
+    },
+    {
+      "confidence" : 0.9995117,
+      "endTime" : 7.5200000000000005,
+      "startTime" : 7.2,
+      "word" : "they"
+    },
+    {
+      "confidence" : 0.99853516,
+      "endTime" : 7.840000000000001,
+      "startTime" : 7.5200000000000005,
+      "word" : "have"
+    },
+    {
+      "confidence" : 0.7885742,
+      "endTime" : 8.96,
+      "startTime" : 7.84,
+      "word" : "really,"
+    },
+    {
+      "confidence" : 0.8942871,
+      "endTime" : 9.52,
+      "startTime" : 8.96,
+      "word" : "really,"
+    },
+    {
+      "confidence" : 1,
+      "endTime" : 9.84,
+      "startTime" : 9.52,
+      "word" : "really"
+    },
+    {
+      "confidence" : 1,
+      "endTime" : 10.48,
+      "startTime" : 10.16,
+      "word" : "long"
+    },
+    {
+      "confidence" : 0.9423828,
+      "endTime" : 11.040000000000001,
+      "startTime" : 10.72,
+      "word" : "um"
+    },
+    {
+      "confidence" : 0.87231445,
+      "endTime" : 12.64,
+      "startTime" : 11.68,
+      "word" : "fronts."
+    },
+    {
+      "confidence" : 0.95996094,
+      "endTime" : 12.88,
+      "startTime" : 12.64,
+      "word" : "And"
+    },
+    {
+      "confidence" : 0.9876302,
+      "endTime" : 13.200000000000001,
+      "startTime" : 12.88,
+      "word" : "that's"
+    },
+    {
+      "confidence" : 0.9970703,
+      "endTime" : 13.6,
+      "startTime" : 13.200000000000001,
+      "word" : "that's"
+    },
+    {
+      "confidence" : 0.9791667,
+      "endTime" : 14.16,
+      "startTime" : 13.6,
+      "word" : "cool."
+    },
+    {
+      "confidence" : 0.94970703,
+      "endTime" : 16.96,
+      "startTime" : 16.8,
+      "word" : "And"
+    },
+    {
+      "confidence" : 0.99576825,
+      "endTime" : 17.279999999999998,
+      "startTime" : 16.96,
+      "word" : "that's"
+    },
+    {
+      "confidence" : 0.9995117,
+      "endTime" : 17.439999999999998,
+      "startTime" : 17.28,
+      "word" : "pretty"
+    },
+    {
+      "confidence" : 1,
+      "endTime" : 17.6,
+      "startTime" : 17.44,
+      "word" : "much"
+    },
+    {
+      "confidence" : 0.9975586,
+      "endTime" : 17.76,
+      "startTime" : 17.6,
+      "word" : "all"
+    },
+    {
+      "confidence" : 0.95214844,
+      "endTime" : 18,
+      "startTime" : 17.84,
+      "word" : "there"
+    },
+    {
+      "confidence" : 0.8100586,
+      "endTime" : 18.16,
+      "startTime" : 18,
+      "word" : "is"
+    },
+    {
+      "confidence" : 0.99365234,
+      "endTime" : 18.24,
+      "startTime" : 18.16,
+      "word" : "to"
+    },
+    {
+      "confidence" : 0.80322266,
+      "endTime" : 18.720000000000002,
+      "startTime" : 18.240000000000002,
+      "word" : "say."
+    }
+  ]
+}
