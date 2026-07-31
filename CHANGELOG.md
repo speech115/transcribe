@@ -6,6 +6,17 @@ the `version` field of the skill definition in
 [SKILL.md](SKILL.md). Rationale for each entry lives in the ADR it names
 ([docs/adr/README.md](docs/adr/README.md)).
 
+## [Unreleased]
+
+### Changed
+
+- Vendored engine binary bumped FluidAudio v0.15.3 → v0.15.5: offline
+  seam-merge artifact fixes, VBx re-clustering and Sortformer v3
+  diarization fixes, ModelHub download rewrite
+  ([#708](https://github.com/FluidInference/FluidAudio/pull/708),
+  [#735](https://github.com/FluidInference/FluidAudio/pull/735),
+  [#765](https://github.com/FluidInference/FluidAudio/pull/765)).
+
 ## [0.4.0] — 2026-08-01
 
 Initial standalone release: the local offline transcription CLI extracted

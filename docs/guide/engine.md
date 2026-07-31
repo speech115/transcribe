@@ -53,3 +53,19 @@ command-line contract, JSON schemas (`wordTimings`/`segments`), speaker
 relabelling, and error classification live behind `lib/engine.py`; nothing
 else in the codebase knows the engine's format
 ([ADR-0001](../adr/ADR-0001-engine-seam.md)).
+
+### Rebuilding
+
+The binary is built from the [FluidAudio](https://github.com/FluidInference/FluidAudio)
+Swift package at the pinned tag (currently **v0.15.5**, built 2026-08-01
+with Xcode 26.6 / Swift 6.3):
+
+```bash
+git clone --depth 1 --branch v0.15.5 https://github.com/FluidInference/FluidAudio.git
+cd FluidAudio && swift build -c release
+cp .build/release/fluidaudiocli vendor/fluidaudiocli
+```
+
+When bumping the engine, verify the seam against real speech (a full
+`bin/transcribe` run with `--speakers`), confirm the 43-fixture test suite
+stays green, and record the new tag here.
