@@ -84,6 +84,8 @@ def main():
     print(f"  {r.transcript_md}")
     print(f"  {r.transcript_json}")
     print(f"  {r.manifest}")
+    if r.workdir is not None:
+        print(f"  отладочные файлы сохранены: {r.workdir}")
 
 
 if __name__ == "__main__":

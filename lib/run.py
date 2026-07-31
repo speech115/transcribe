@@ -21,12 +21,33 @@ from pathlib import Path
 
 from engine import EngineError, FluidAudioEngine
 from merge import merge_words_to_turns
-from naming import safe_folder_name, unique_dir
 
 DEFAULT_RTF = 30.0
 STALE_S = 60.0
 PROGRESS_NAME = "progress.json"
 YT_RE = re.compile(r"(youtube\.com|youtu\.be)", re.I)
+BAD_PATH_CHARS_RE = re.compile(r"[\x00-\x1f/:]+")
+
+
+def safe_folder_name(name: str, fallback: str = "transcript") -> str:
+    """Human-readable folder name, preserving media title where possible."""
+    clean = BAD_PATH_CHARS_RE.sub(" - ", name or "")
+    clean = re.sub(r"\s+", " ", clean).strip(" .-_")
+    return clean[:180] or fallback
+
+
+def unique_dir(path: Path) -> Path:
+    """Return path, or path (2), path (3), ... when path already exists."""
+    if not path.exists():
+        return path
+    parent = path.parent
+    stem = path.name
+    index = 2
+    while True:
+        candidate = parent / f"{stem} ({index})"
+        if not candidate.exists():
+            return candidate
+        index += 1
 
 
 class RunError(Exception):
@@ -43,6 +64,7 @@ class RunResult:
     duration_s: float
     asr_rtf: float | None
     language: str
+    workdir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -429,7 +451,8 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
                          transcript_json=out_dir / "transcript.json",
                          manifest=out_dir / "manifest.json",
                          speakers=n_speakers, duration_s=duration,
-                         asr_rtf=rtf, language=result.language)
+                         asr_rtf=rtf, language=result.language,
+                         workdir=(workdir if keep_tmp else None))
     except EngineError as exc:
         progress.finish("error", error=str(exc))
         raise RunError(str(exc)) from exc

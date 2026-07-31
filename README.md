@@ -88,7 +88,7 @@ The CLI is symlinked into `/Users/sereja/bin/transcribe`.
 ## Verification
 
 ```bash
-python3 tests/test_merge.py
+python3 -m pytest tests/ -q
 transcribe --help
 ```
 

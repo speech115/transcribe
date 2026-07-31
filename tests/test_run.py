@@ -254,6 +254,18 @@ def test_run_preflight_error_leaves_no_progress():
         assert not (out / "progress.json").exists()
 
 
+def test_run_keep_tmp_reports_workdir():
+    with _tmp() as td:
+        src = td / "in.wav"
+        src.write_bytes(b"x" * 100)
+        out = td / "out"
+        with _patch_engine(FakeEngine()), _patch_prep(duration=10.0):
+            res = run(str(src), out=out, keep_tmp=True)
+            assert res.workdir is not None and res.workdir.exists()
+            res2 = run(str(src), out=out, speakers="off")
+            assert res2.workdir is None
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
