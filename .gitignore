@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .DS_Store
 *.log
+
+# глобальный ~/.gitignore игнорирует vendor/; бинарник движка нужен в репо
+!vendor/
+!vendor/fluidaudiocli
