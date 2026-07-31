@@ -1,0 +1,6 @@
+interface:
+  display_name: "transcribe"
+  short_description: "Local transcription with speaker diarization"
+  icon_small: "./assets/transcribe-small.svg"
+  icon_large: "./assets/transcribe.png"
+  default_prompt: "Use $transcribe to transcribe this audio or video, add speaker labels when possible, and save the standard transcript artifacts."
