@@ -1,0 +1,70 @@
+name: Bug report
+description: A run fails or produces something other than the documented contract
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never paste audio contents, transcripts, or personal data from a
+        recording. Redact file names and titles as `call.m4a`, `<title>`.
+        Privacy-sensitive reports go through [SECURITY.md](../blob/main/SECURITY.md)
+        instead of this form.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The `version` field of `SKILL.md`, or the latest commit hash.
+      placeholder: "0.4.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: The exact invocation, redacted.
+      render: shell
+      placeholder: transcribe call.m4a --speakers auto
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: |
+        The stderr output and exit code (`echo $?`), or the `transcribe status --json`
+        line. Redact paths and titles before pasting.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+      description: Point at the rule it breaks — a guide page, an ADR, or the README.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        macOS version, chip (Apple Silicon or Intel), `ffmpeg -version` head,
+        and the output of `transcribe status --json` on the affected run.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before submitting
+      options:
+        - label: I redacted media contents, transcripts, personal data, and identifying paths or titles.
+          required: true
+        - label: I reproduced this on the latest version.
+          required: false

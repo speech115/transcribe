@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Push and pull_request runs use distinct refs and check names. This preserves
+# pre-PR branch CI without creating two required "test" checks for one SHA.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ github.event_name == 'pull_request' && 'test' || 'branch-test' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: pip install pytest
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
+  # macOS is a first-class target (the vendored engine is arm64 macOS);
+  # the suite itself is pure-stdlib and runs anywhere.
+  test-macos:
+    name: test-macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: pip install pytest
+      - name: Run tests
+        run: python -m pytest tests/ -q

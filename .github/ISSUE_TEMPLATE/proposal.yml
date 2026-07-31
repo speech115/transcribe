@@ -1,0 +1,52 @@
+name: Proposal
+description: Suggest new behavior — read the process rules first
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is a small single-maintainer tool in daily local use. New
+        behavior is welcome, but the maintainer decides: open this issue and
+        discuss before any code. Behavior that changes the run contract or
+        the engine seam needs an ADR
+        ([docs/adr/README.md](../blob/main/docs/adr/README.md)) before it is
+        built. Pull requests that add unrequested behavior are closed.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and where does the current CLI stop you?
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do today
+      description: |
+        The current workaround — a shell script, post-processing a transcript,
+        another tool, or nothing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: shape
+    attributes:
+      label: Proposed shape
+      description: |
+        Rough command, flags, and artifact changes. Keep output compatible:
+        artifact schemas are additive-only.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checked
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked the guide (docs/guide/) — this is not already possible.
+          required: true
+        - label: I checked CHANGELOG.md and the ADR index — this is not already tracked.
+          required: true

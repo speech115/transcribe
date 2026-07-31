@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: How do I transcribe X?
+    url: https://github.com/speech115/transcribe/tree/main/docs/guide
+    about: The user guide has a task-shaped page per area, with worked examples.
+  - name: Agent skill contract
+    url: https://github.com/speech115/transcribe/blob/main/SKILL.md
+    about: The routing table and recipes that agents load for transcription runs.
+  - name: Security or privacy issue
+    url: https://github.com/speech115/transcribe/security/advisories/new
+    about: Report privately. Never paste media contents, transcripts, or personal data into an issue.
