@@ -117,7 +117,7 @@ The standard engine is FluidAudio / Parakeet:
 - ASR: Parakeet TDT v3 via FluidAudio.
 - Diarization: FluidAudio pyannote-style diarization, streaming mode by default.
 - Runtime: local Apple Silicon path; after models are cached, it is offline.
-- Vendored binary: `tools/transcribe/vendor/fluidaudiocli`.
+- Vendored binary: `vendor/fluidaudiocli`.
 
 This route provides a MacWhisper-style local workflow without depending on the
 MacWhisper app or its history database.
@@ -218,4 +218,5 @@ See `references/api.md` for limits, formats, and known-speaker details.
 ## Reference map
 
 - `references/api.md` — cloud backend details (OpenAI gpt-4o-transcribe models, Deepgram nova-3).
-- The main local CLI implementation lives in the sibling `tools/transcribe/` directory.
+- The main local CLI implementation lives in this repository: `bin/transcribe`,
+  `lib/`, `tests/`, `vendor/fluidaudiocli`.
