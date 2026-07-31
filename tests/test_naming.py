@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Тесты имени output-папки."""
 import os
-import runpy
+import sys
 
-
-CLI = os.path.join(os.path.dirname(__file__), "..", "bin", "transcribe")
-cli = runpy.run_path(CLI, run_name="transcribe_test")
-safe_folder_name = cli["safe_folder_name"]
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
+from naming import safe_folder_name
 
 
 def test_preserves_human_video_title():

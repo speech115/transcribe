@@ -1,12 +1,12 @@
 ---
 name: transcribe
-description: "Transcribe local audio/video files and YouTube media into transcript.md, transcript.json, and manifest.json, with optional speaker diarization and timestamps. Use for calls, voice notes, interviews, podcasts, lectures, recordings, or requests to identify speakers. Prefer the local offline FluidAudio/Parakeet CLI for private or routine work; use MacWhisper only when explicitly requested and its doctor passes, and use cloud APIs only with explicit approval."
+description: "Transcribe local audio/video files and YouTube media into transcript.md, transcript.json, and manifest.json, with optional speaker diarization and timestamps. Use for calls, voice notes, interviews, podcasts, lectures, recordings, or requests to identify speakers. Prefer the local offline FluidAudio/Parakeet CLI for private or routine work; use MacWhisper only when explicitly requested and its doctor passes."
 ---
 
 # Transcribe
 
 <!-- skill-index-metadata
-tags: [transcription, asr, diarization, audio, video, media, parakeet, fluidaudio, macwhisper, openai-transcribe, deepgram]
+tags: [transcription, asr, diarization, audio, video, media, parakeet, fluidaudio, macwhisper]
 aliases: [audio transcribe, transcribe media, audio transcription, video transcription, diarization, speaker diarization, транскрибация, транскрибировать аудио, транскрибировать видео, диаризация, распознать спикеров]
 namespace: workspace
 dependencies: []
@@ -23,9 +23,6 @@ directories may symlink here; edit the target, not copied or linked views.
 - YouTube requiring fresh ASR or diarization: pass the URL to `transcribe`.
 - Explicit MacWhisper request: run `macwhisper-transcribe doctor --json` first
   and use that route only when healthy.
-- Explicit cloud request, known-speaker references, or an unavailable local
-  engine: read `references/api.md`; obtain approval before uploading private
-  media.
 - Existing finished transcript: do not transcribe again; perform the requested
   cleanup, summary, extraction, or analysis directly.
 
@@ -150,8 +147,8 @@ database directly, or assume that an installed `.app` means its CLI is healthy.
 ## Guardrails
 
 - Prefer local processing for private calls, voice notes, and interviews.
-- Never upload media to OpenAI, Deepgram, or another service without explicit
-  approval for that source.
+- Never upload media to cloud services; the local CLI is the only
+  transcription route.
 - Do not use the MacWhisper GUI for agent workflows.
 - Do not rely on the old `mw` Python shim or direct SQLite scraping;
   MacWhisper updates can break those surfaces.
@@ -174,49 +171,7 @@ transcribe /tmp/call_5min.wav --speakers auto --out /tmp/tt_call
 
 Expected shape: `transcript.md`, `transcript.json`, `manifest.json`, speaker labels in markdown such as `S1`/`S2` when there is more than one speaker, and no blank speaker labels in a multi-speaker file.
 
-## Alternative cloud backends (API)
-
-When the local Parakeet/FluidAudio route is unavailable or the user explicitly
-requests cloud models or known-speaker references via API:
-
-See `references/api.md` in this skill directory and the helper `scripts/transcribe_diarize.py`.
-
-Quick examples follow. Never ask the user to paste an API key into chat.
-
-Single file (fast text):
-```bash
-python3 scripts/transcribe_diarize.py \
-  path/to/audio.wav \
-  --backend openai \
-  --out transcript.txt
-```
-
-Diarization + known speakers (OpenAI):
-```bash
-python3 scripts/transcribe_diarize.py \
-  meeting.m4a \
-  --backend openai \
-  --model gpt-4o-transcribe-diarize \
-  --known-speaker "Alice=refs/alice.wav" \
-  --known-speaker "Bob=refs/bob.wav" \
-  --response-format diarized_json \
-  --out-dir output/transcribe/meeting
-```
-
-Deepgram multilingual:
-```bash
-python3 scripts/transcribe_diarize.py \
-  interview.mp3 \
-  --backend deepgram \
-  --model nova-3 \
-  --response-format diarized_json \
-  --out interview.json
-```
-
-See `references/api.md` for limits, formats, and known-speaker details.
-
 ## Reference map
 
-- `references/api.md` — cloud backend details (OpenAI gpt-4o-transcribe models, Deepgram nova-3).
 - The main local CLI implementation lives in this repository: `bin/transcribe`,
   `lib/`, `tests/`, `vendor/fluidaudiocli`.

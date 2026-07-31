@@ -20,259 +20,32 @@
              [--out DIR] [--out-root DIR] [--diar-mode streaming|offline] [--asr-model v3|v2]
 """
 import argparse
-import json
-import os
-import re
-import shutil
-import subprocess
 import sys
-import tempfile
-import threading
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
-from engine import EngineError, FluidAudioEngine  # noqa: E402
-from merge import merge_words_to_turns  # noqa: E402
-from naming import safe_folder_name, unique_dir  # noqa: E402
-
-FLUID = ROOT / "vendor" / "fluidaudiocli"
-DEFAULT_OUT_ROOT = Path("/Users/sereja/Downloads/transcripts")
-YT_RE = re.compile(r"(youtube\.com|youtu\.be)", re.I)
-
-
-def die(msg: str, code: int = 1):
-    raise SystemExit(f"transcribe: error: {msg}")
-
-
-def run(cmd, **kw):
-    return subprocess.run(cmd, check=True, capture_output=True, text=True, **kw)
-
-
-def youtube_title(url: str) -> str:
-    """Read YouTube title without downloading media."""
-    if not shutil.which("yt-dlp"):
-        die("для YouTube нужен yt-dlp (brew install yt-dlp)")
-    try:
-        title = run(["yt-dlp", "--skip-download", "--print", "%(title)s", url]).stdout.strip()
-    except subprocess.CalledProcessError as exc:
-        msg = (exc.stderr or exc.stdout or "").strip()
-        die(f"не удалось получить название YouTube-видео: {msg or url}")
-    return title
-
-
-def ffprobe_duration(path: Path) -> float:
-    try:
-        out = run(["ffprobe", "-loglevel", "error", "-show_entries",
-                   "format=duration", "-of", "csv=p=0", str(path)]).stdout.strip()
-        return float(out)
-    except Exception:
-        return 0.0
-
-
-def to_wav16k(src: Path, dst: Path):
-    """Любой аудио/видео -> 16kHz mono wav (вход для ASR/диаризации)."""
-    run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
-         "-ar", "16000", "-ac", "1", str(dst)])
-
-
-def fetch_youtube_audio(url: str, workdir: Path) -> Path:
-    """yt-dlp -> bestaudio. Возвращает путь к скачанному аудио."""
-    if not shutil.which("yt-dlp"):
-        die("для YouTube нужен yt-dlp (brew install yt-dlp)")
-    out_tmpl = str(workdir / "yt_audio.%(ext)s")
-    run(["yt-dlp", "-f", "bestaudio", "-x", "--audio-format", "m4a",
-         "-o", out_tmpl, url])
-    files = list(workdir.glob("yt_audio.*"))
-    if not files:
-        die("yt-dlp не скачал аудио")
-    return files[0]
-
-
-def hhmmss(sec: float) -> str:
-    sec = int(round(sec))
-    h, rem = divmod(sec, 3600)
-    m, s = divmod(rem, 60)
-    return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
-
-
-def render_md(meta: dict, turns: list, multi: bool) -> str:
-    fm = [
-        "---",
-        f"source: {meta['source']}",
-        f"duration: {hhmmss(meta['duration'])}",
-        f"speakers: {meta['speakers']}",
-        f"language: {meta['language']}",
-        f"engine: {meta['engine']}",
-        f"generated: {meta['generated']}",
-        "---",
-        "",
-    ]
-    body = []
-    for t in turns:
-        ts = hhmmss(t["start"])
-        if multi and t["speaker"]:
-            body.append(f"**[{ts} · {t['speaker']}]** {t['text']}")
-        else:
-            body.append(f"**[{ts}]** {t['text']}")
-        body.append("")
-    return "\n".join(fm + body).rstrip() + "\n"
-
-
-PROGRESS_NAME = "progress.json"
-STALE_S = 60.0
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-class Progress:
-    """Live-трейсинг прогона: <out>/progress.json, обновляется фоновой нитью."""
-
-    def __init__(self, path: Path, source: str):
-        self.path = path
-        self.state = {
-            "source": source, "status": "running", "stage": "init",
-            "pct": None, "eta_s": None, "elapsed_s": 0,
-            "pid": os.getpid(), "started_at": now_iso(), "updated_at": now_iso(),
-        }
-        self._stop = threading.Event()
-        self._t0 = time.time()
-
-    def set(self, **kw):
-        self.state.update(kw)
-        self.state["updated_at"] = now_iso()
-
-    def start(self, interval: float = 2.0):
-        t = threading.Thread(target=self._loop, args=(interval,), daemon=True)
-        t.start()
-
-    def _write(self):
-        try:
-            self.path.write_text(json.dumps(self.state, ensure_ascii=False, indent=2))
-        except OSError:
-            pass
-
-    def _loop(self, interval):
-        while not self._stop.wait(interval):
-            self.state["elapsed_s"] = round(time.time() - self._t0, 1)
-            self.state["pct"], self.state["eta_s"] = self._estimate()
-            self._write()
-
-    def _estimate(self):
-        stage, elapsed = self.state.get("stage"), self.state.get("elapsed_s") or 0
-        duration = self.state.get("duration") or 0
-        if stage == "prep" and duration > 0:
-            total = duration / 20.0
-        elif stage == "asr" and duration > 0:
-            total = duration / (self.state.get("rtf") or 30.0)
-        else:
-            return None, None
-        if total <= 0:
-            return None, None
-        return min(99.0, elapsed / total * 100), max(0.0, total - elapsed)
-
-    def finish(self, status: str, **kw):
-        self.state["elapsed_s"] = round(time.time() - self._t0, 1)
-        self.set(status=status, **kw)
-        self._write()
-
-
-def load_last_rtf(out_root: Path) -> float:
-    """Калибровка ETA для ASR: RTF из самого свежего прошлого manifest.json."""
-    best = None
-    for m in out_root.rglob("manifest.json"):
-        try:
-            rtf = json.loads(m.read_text()).get("asr_rtf")
-        except Exception:
-            continue
-        if isinstance(rtf, (int, float)) and rtf > 0:
-            ts = m.stat().st_mtime
-            if best is None or ts > best[1]:
-                best = (rtf, ts)
-    return best[0] if best else 30.0
+from run import DEFAULT_OUT_ROOT, RunError, format_duration, run, status, status_dict, status_line  # noqa: E402
 
 
 def cmd_status(argv) -> int:
     p = argparse.ArgumentParser(prog="transcribe status", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--out", default=None, help="папка прогона (или выходная папка с progress.json)")
+    p.add_argument("--out", default=None, help="папка прогона")
     p.add_argument("--out-root", default=None,
                    help=f"корень поиска последнего активного прогона (default {DEFAULT_OUT_ROOT})")
     p.add_argument("--json", action="store_true", help="машинный вывод")
-    p.add_argument("--max-age", type=float, default=STALE_S,
+    p.add_argument("--max-age", type=float, default=60.0,
                    help="считать прогон активным, пока progress.json не старше N сек (default 60)")
     args = p.parse_args(argv)
 
-    if args.out:
-        candidates = [Path(args.out) / PROGRESS_NAME] + sorted(Path(args.out).glob(PROGRESS_NAME))
-    else:
-        root = Path(args.out_root) if args.out_root else DEFAULT_OUT_ROOT
-        candidates = sorted(root.rglob(PROGRESS_NAME),
-                            key=lambda f: f.stat().st_mtime, reverse=True)
-
-    state = None
-    for c in candidates:
-        try:
-            st = json.loads(c.read_text())
-        except Exception:
-            continue
-        age = time.time() - c.stat().st_mtime
-        if st.get("status") == "running" and age > args.max_age:
-            continue
-        state = st
-        break
-
-    if state is None:
-        if args.json:
-            print(json.dumps({"status": "idle"}, ensure_ascii=False))
-        else:
-            print("нет активного прогона транскрибации")
-        return 0
-
+    st = status(Path(args.out) if args.out else None,
+                out_root=Path(args.out_root) if args.out_root else DEFAULT_OUT_ROOT,
+                max_age_s=args.max_age)
     if args.json:
-        print(json.dumps(state, ensure_ascii=False, indent=2))
-        return 0
-
-    if state.get("status") == "done":
-        bits = ["✓ готово"]
-        if state.get("speakers"):
-            bits.append(f"{state['speakers']} спикер(ов)")
-        if state.get("duration"):
-            bits.append(hhmmss(state["duration"]))
-        bits.append(f"elapsed {hhmmss(state.get('elapsed_s') or 0)}")
-        if state.get("transcript_md"):
-            bits.append(state["transcript_md"])
-        print(" · ".join(bits))
-        return 0
-    if state.get("status") == "error":
-        print(f"✗ ошибка: {state.get('error') or 'см. progress.json'}")
-        return 0
-
-    stage = state.get("stage")
-    pct = state.get("pct")
-    if stage == "prep":
-        label = f"конвертация {round(pct)}%" if isinstance(pct, (int, float)) else "конвертация"
-    elif stage == "asr":
-        label = f"ASR {round(pct)}%" if isinstance(pct, (int, float)) else "ASR"
-    elif stage == "diar":
-        label = "диаризация"
-    elif stage == "merge":
-        label = "сборка"
+        print(status_dict(st))
     else:
-        label = state.get("status", stage or "")
-    parts = [label]
-    eta = state.get("eta_s")
-    if isinstance(eta, (int, float)):
-        parts.append(f"ETA {hhmmss(eta)}")
-    parts.append(f"elapsed {hhmmss(state.get('elapsed_s') or 0)}")
-    src = state.get("source")
-    if src:
-        parts.append(src)
-    print("🎙 " + " · ".join(parts))
+        print(status_line(st))
     return 0
 
 
@@ -295,111 +68,22 @@ def main():
     p.add_argument("--keep-tmp", action="store_true")
     args = p.parse_args()
 
-    if not FLUID.exists():
-        die(f"не найден движок: {FLUID}")
-    for tool in ("ffmpeg", "ffprobe"):
-        if not shutil.which(tool):
-            die(f"требуется {tool}")
-
-    is_url = "://" in args.input
-    is_youtube = is_url and YT_RE.search(args.input)
-    if is_url and not is_youtube:
-        die("поддерживаются локальные файлы и YouTube-ссылки")
-    if not is_url and not Path(args.input).exists():
-        die(f"файл не найден: {args.input}")
-
-    if args.out:
-        out_dir = Path(args.out)
-    elif is_youtube:
-        out_root = Path(args.out_root) if args.out_root else DEFAULT_OUT_ROOT
-        out_dir = unique_dir(out_root / safe_folder_name(youtube_title(args.input), "youtube"))
-    else:
-        out_root = Path(args.out_root) if args.out_root else DEFAULT_OUT_ROOT
-        out_dir = unique_dir(out_root / safe_folder_name(Path(args.input).stem))
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    workdir = Path(tempfile.mkdtemp(prefix="transcribe_"))
-    timings = {}
-    progress = None
     try:
-        progress = Progress(out_dir / PROGRESS_NAME, args.input)
-        progress.set(stage="prep")
-        progress.start()
+        r = run(args.input,
+                out=Path(args.out) if args.out else None,
+                out_root=Path(args.out_root) if args.out_root else DEFAULT_OUT_ROOT,
+                speakers=args.speakers, lang=args.lang,
+                diar_mode=args.diar_mode, asr_model=args.asr_model,
+                keep_tmp=args.keep_tmp)
+    except RunError as exc:
+        print(f"transcribe: error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
-        src = fetch_youtube_audio(args.input, workdir) if is_youtube else Path(args.input)
-
-        wav = workdir / "audio_16k.wav"
-        t0 = time.time()
-        progress.set(duration=ffprobe_duration(src))
-        to_wav16k(src, wav)
-        timings["prep_s"] = round(time.time() - t0, 1)
-        duration = ffprobe_duration(wav)
-
-        t0 = time.time()
-        progress.set(stage="asr", duration=duration,
-                     rtf=load_last_rtf(out_dir.parent))
-        engine = FluidAudioEngine(binary=FLUID, model=args.asr_model,
-                                  diar_mode=args.diar_mode)
-        stage_marks = []
-        result = engine.transcribe(wav, lang=args.lang, speakers=args.speakers,
-                                   on_stage=lambda s: stage_marks.append((s, time.time())))
-        elapsed = time.time() - t0
-        asr_s = stage_marks[0][1] - t0 if len(stage_marks) > 1 else elapsed
-        timings["asr_s"] = round(asr_s, 1)
-        timings["diar_s"] = round(elapsed - (stage_marks[1][1] - t0), 1) if len(stage_marks) > 1 else None
-        if duration > 0 and timings["asr_s"] > 0:
-            progress.set(rtf=round(duration / timings["asr_s"], 1))
-        words = result.words
-        diar_segs = result.segments
-        n_speakers = result.speakers
-        n_speakers = max(n_speakers, 1)
-        multi = n_speakers > 1
-
-        progress.set(stage="merge")
-        turns = merge_words_to_turns(words, diar_segs)
-
-        generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        lang_out = result.language
-        meta = {"source": (args.input if is_youtube else Path(args.input).name),
-                "duration": duration, "speakers": n_speakers,
-                "language": lang_out, "engine": result.engine, "generated": generated}
-
-        (out_dir / "transcript.md").write_text(render_md(meta, turns, multi))
-        (out_dir / "transcript.json").write_text(json.dumps(
-            {**meta, "turns": turns, "words": words}, ensure_ascii=False, indent=2))
-
-        rtf = round(duration / timings.get("asr_s", 1), 1) if timings.get("asr_s") else None
-        manifest = {**meta, "out_dir": str(out_dir), "timings_s": timings,
-                    "asr_rtf": rtf, "asr_model": args.asr_model,
-                    "diar_mode": (args.diar_mode if multi or args.speakers != "off" else None),
-                    "speakers_arg": args.speakers, "words": len(words), "turns": len(turns),
-                    "engine_binary": str(FLUID)}
-        (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
-
-        progress.finish("done", out_dir=str(out_dir), speakers=n_speakers,
-                        language=lang_out, duration=duration, pct=100, eta_s=0,
-                        transcript_md=str(out_dir / "transcript.md"))
-
-        print(f"✓ {n_speakers} спикер(ов) · {hhmmss(duration)} · ASR {rtf}x · {lang_out}")
-        print(f"  {out_dir/'transcript.md'}")
-        print(f"  {out_dir/'transcript.json'}")
-        print(f"  {out_dir/'manifest.json'}")
-    except EngineError as exc:
-        if progress is not None:
-            progress.finish("error", error=str(exc))
-        die(str(exc))
-    except SystemExit as exc:
-        if progress is not None:
-            err = exc.code if isinstance(exc.code, str) else "aborted"
-            progress.finish("error", error=err)
-        raise
-    except Exception as exc:
-        if progress is not None:
-            progress.finish("error", error=str(exc))
-        raise
-    finally:
-        if not args.keep_tmp:
-            shutil.rmtree(workdir, ignore_errors=True)
+    print(f"✓ {r.speakers} спикер(ов) · {format_duration(r.duration_s)}"
+          f" · ASR {r.asr_rtf}x · {r.language}")
+    print(f"  {r.transcript_md}")
+    print(f"  {r.transcript_json}")
+    print(f"  {r.manifest}")
 
 
 if __name__ == "__main__":
