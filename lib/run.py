@@ -545,6 +545,8 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
         asr_model: str = "v3", keep_tmp: bool = False,
         clean_fillers: bool = False, formats=(), replacements_file: Path | None = None) -> RunResult:
     """Полный прогон: preflight → prep → asr → диаризация → merge → артефакты."""
+    subtitle_formats = normalize_formats(formats)
+    replacements = load_replacements(replacements_file)
     if not FLUID.exists():
         raise RunError(f"не найден движок: {FLUID}")
     for tool in ("ffmpeg", "ffprobe"):
@@ -552,8 +554,6 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
             raise RunError(f"требуется {tool}")
     if out is None and out_root is None:
         raise RunError("укажите --out или --out-root")
-    subtitle_formats = normalize_formats(formats)
-    replacements = load_replacements(replacements_file)
     options_hash = processing_options_hash(
         speakers=speakers, lang=lang, diar_mode=diar_mode, asr_model=asr_model,
         clean_fillers=clean_fillers, formats=subtitle_formats,
