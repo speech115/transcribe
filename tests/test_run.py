@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -243,10 +244,31 @@ def test_is_processed_honors_requested_options_hash():
         output.mkdir()
         (output / "manifest.json").write_text(json.dumps({
             "status": "done", "options_hash": "hash-a",
+            "source_path": str(source.resolve()),
+        }))
+
+        signature = run_mod.source_signature(source)
+        manifest = json.loads((output / "manifest.json").read_text())
+        manifest["source_signature"] = list(signature)
+        (output / "manifest.json").write_text(json.dumps(manifest))
+        assert is_processed(source, td, options_hash="hash-a", signature=signature) is True
+        assert is_processed(source, td, options_hash="hash-a", signature=(999, 999)) is False
+        assert is_processed(source, td, options_hash="hash-b", signature=signature) is False
+
+
+def test_is_processed_rejects_manifest_without_source_signature_for_watch_recovery():
+    with _tmp() as td:
+        source = td / "call.wav"
+        source.write_bytes(b"audio")
+        output = td / "call"
+        output.mkdir()
+        (output / "manifest.json").write_text(json.dumps({
+            "status": "done", "options_hash": "hash-a",
             "source_path": str(source.resolve())}))
 
-        assert is_processed(source, td, options_hash="hash-a") is True
-        assert is_processed(source, td, options_hash="hash-b") is False
+        assert is_processed(
+            source, td, options_hash="hash-a", signature=run_mod.source_signature(source)
+        ) is False
 
 
 def test_is_processed_does_not_match_same_basename_from_another_directory():
@@ -317,6 +339,7 @@ def test_run_writes_all_artifacts_consistently():
         assert manifest["language"] == "ru"
         assert manifest["engine"] == "fake"
         assert manifest["clean_fillers"] is False
+        assert manifest["source_signature"] == list(run_mod.source_signature(src))
         assert manifest["words"] == 2 and manifest["turns"] == 2
         assert len(tjson["words"]) == 2 and len(tjson["turns"]) == 2
         assert tjson["speakers"] == manifest["speakers"]
@@ -398,6 +421,66 @@ def test_run_writes_requested_subtitles_and_applies_replacements_to_turns_only()
             "WEBVTT\n\n00:00:00.000 --> 00:00:00.500\nS1: здравствуйте\n\n"
             "00:00:00.600 --> 00:00:01.000\nS2: мир\n"
         )
+
+
+def test_run_removes_stale_subtitles_when_formats_are_not_requested():
+    with _tmp() as td:
+        src = td / "in.wav"
+        src.write_bytes(b"x" * 100)
+        out = td / "out"
+        out.mkdir()
+        (out / "transcript.srt").write_text("stale")
+        (out / "transcript.vtt").write_text("stale")
+        with _patch_engine(FakeEngine()), _patch_prep(duration=10.0):
+            run(str(src), out=out)
+
+        assert not (out / "transcript.srt").exists()
+        assert not (out / "transcript.vtt").exists()
+
+
+def test_source_tool_failures_become_run_errors():
+    original_run = run_mod.subprocess.run
+
+    def failing_run(command, **kwargs):
+        raise subprocess.CalledProcessError(1, command, stderr="bad media")
+
+    run_mod.subprocess.run = failing_run
+    try:
+        try:
+            run_mod._to_wav16k(Path("in.wav"), Path("out.wav"))
+        except RunError as exc:
+            assert "ffmpeg" in str(exc)
+            assert "bad media" in str(exc)
+        else:
+            raise AssertionError("expected RunError from ffmpeg failure")
+
+        def missing_tool(command, **kwargs):
+            raise FileNotFoundError("ffmpeg")
+
+        run_mod.subprocess.run = missing_tool
+        try:
+            run_mod._to_wav16k(Path("in.wav"), Path("out.wav"))
+        except RunError as exc:
+            assert "ffmpeg" in str(exc)
+        else:
+            raise AssertionError("expected RunError from missing ffmpeg")
+
+        run_mod.subprocess.run = failing_run
+        original_which = run_mod.shutil.which
+        run_mod.shutil.which = lambda tool: f"/usr/bin/{tool}"
+        try:
+            with _tmp() as td:
+                try:
+                    run_mod._fetch_youtube_audio("https://youtu.be/example", td)
+                except RunError as exc:
+                    assert "yt-dlp" in str(exc)
+                    assert "bad media" in str(exc)
+                else:
+                    raise AssertionError("expected RunError from yt-dlp failure")
+        finally:
+            run_mod.shutil.which = original_which
+    finally:
+        run_mod.subprocess.run = original_run
 
 
 def test_run_labels_unassigned_multi_speaker_subtitle_turns_as_unknown():

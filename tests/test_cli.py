@@ -129,7 +129,7 @@ def test_cli_watch_transcribes_candidate_and_stops_on_interrupt():
 
             cli.run = fake_run
             cli.watch_candidate = lambda path, state: True
-            cli.is_processed = lambda path, out_root, options_hash=None: False
+            cli.is_processed = lambda path, out_root, options_hash=None, signature=None: False
             cli.time.sleep = lambda _: (_ for _ in ()).throw(KeyboardInterrupt)
             sys.argv = ["transcribe", "--watch", str(inbox),
                         "--out-root", str(Path(td) / "out"),
@@ -148,6 +148,52 @@ def test_cli_watch_transcribes_candidate_and_stops_on_interrupt():
     assert calls[0][1]["clean_fillers"] is True
     assert calls[0][1]["out_root"] == Path(td) / "out"
     assert "transcript.md" in output.getvalue()
+
+
+def test_cli_watch_defaults_to_standard_output_root():
+    cli = _load_cli()
+    calls = []
+    original_run = cli.run
+    original_candidate = cli.watch_candidate
+    original_processed = cli.is_processed
+    original_sleep = cli.time.sleep
+    original_default = cli.DEFAULT_OUT_ROOT
+    original_argv = sys.argv[:]
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            inbox = Path(td) / "inbox"
+            inbox.mkdir()
+            source = inbox / "call.wav"
+            source.write_bytes(b"audio")
+            default_root = Path(td) / "default-transcripts"
+
+            def fake_run(source, **kwargs):
+                calls.append((source, kwargs))
+                return RunResult(out_dir=default_root / "call",
+                                 transcript_md=default_root / "call/transcript.md",
+                                 transcript_json=default_root / "call/transcript.json",
+                                 manifest=default_root / "call/manifest.json",
+                                 speakers=1, duration_s=2.0, asr_rtf=3.0,
+                                 language="en")
+
+            cli.run = fake_run
+            cli.DEFAULT_OUT_ROOT = default_root
+            cli.watch_candidate = lambda path, state: True
+            cli.is_processed = lambda path, out_root, options_hash=None, signature=None: False
+            cli.time.sleep = lambda _: (_ for _ in ()).throw(KeyboardInterrupt)
+            sys.argv = ["transcribe", "--watch", str(inbox)]
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                cli.main()
+
+            assert len(calls) == 1
+            assert calls[0][1]["out_root"] == default_root
+    finally:
+        cli.run = original_run
+        cli.watch_candidate = original_candidate
+        cli.is_processed = original_processed
+        cli.time.sleep = original_sleep
+        cli.DEFAULT_OUT_ROOT = original_default
+        sys.argv = original_argv
 
 
 def test_cli_watch_persists_failure_and_skips_it_after_restart():
@@ -172,7 +218,7 @@ def test_cli_watch_persists_failure_and_skips_it_after_restart():
 
             cli.run = failing_run
             cli.watch_candidate = lambda path, state: True
-            cli.is_processed = lambda path, out_root, options_hash=None: False
+            cli.is_processed = lambda path, out_root, options_hash=None, signature=None: False
             sleeps = iter([None, "stop"])
 
             def fake_sleep(_):
@@ -260,7 +306,7 @@ def test_cli_watch_reprocesses_done_state_when_manifest_is_missing():
 
             cli.run = fake_run
             cli.watch_candidate = lambda path, state: True
-            cli.is_processed = lambda path, out_root, options_hash=None: False
+            cli.is_processed = lambda path, out_root, options_hash=None, signature=None: False
             cli.time.sleep = lambda _: (_ for _ in ()).throw(KeyboardInterrupt)
             sys.argv = ["transcribe", "--watch", str(inbox),
                         "--out-root", str(out_root)]

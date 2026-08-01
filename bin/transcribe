@@ -106,7 +106,8 @@ def _watch(watch_dir: Path, *, out_root: Path, speakers: str, lang: str,
                             and record.get("signature") == list(signature)
                             and record.get("options_hash") == options_hash)
             if ((record is None or same_attempt)
-                    and is_processed(source, out_root, options_hash=options_hash)):
+                    and is_processed(source, out_root, options_hash=options_hash,
+                                     signature=signature)):
                 if not same_attempt or record.get("status") != "done":
                     sources[key_text] = {"signature": list(signature),
                                          "options_hash": options_hash, "status": "done",
@@ -176,7 +177,7 @@ def main():
         watch_dir = Path(args.watch)
         if not watch_dir.is_dir():
             p.error(f"папка watch не найдена: {watch_dir}")
-        out_root = Path(args.out_root) if args.out_root else watch_dir
+        out_root = Path(args.out_root) if args.out_root else DEFAULT_OUT_ROOT
         try:
             _watch(watch_dir, out_root=out_root, speakers=args.speakers, lang=args.lang,
                    diar_mode=args.diar_mode, asr_model=args.asr_model,

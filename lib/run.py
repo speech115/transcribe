@@ -103,8 +103,9 @@ def processing_options_hash(*, speakers: str, lang: str, diar_mode: str,
     return hashlib.sha256(encoded).hexdigest()
 
 
-def is_processed(source: Path, out_root: Path, *, options_hash: str | None = None) -> bool:
-    """Return true when a watch output already has a completed manifest."""
+def is_processed(source: Path, out_root: Path, *, options_hash: str | None = None,
+                 signature: tuple[int, int] | None = None) -> bool:
+    """Return true when a watch output matches the completed run contract."""
     source = Path(source)
     root = Path(out_root)
     base = root / safe_folder_name(source.stem)
@@ -127,6 +128,9 @@ def is_processed(source: Path, out_root: Path, *, options_hash: str | None = Non
             continue
         if (options_hash is not None
                 and manifest.get("source_path") != str(source.resolve())):
+            continue
+        if (signature is not None
+                and manifest.get("source_signature") != list(signature)):
             continue
         recorded_source = manifest.get("source")
         if recorded_source in (None, source.name, str(source)):
@@ -316,8 +320,10 @@ def _fetch_youtube_audio(url: str, workdir: Path) -> Path:
     if not shutil.which("yt-dlp"):
         raise RunError("для YouTube нужен yt-dlp (brew install yt-dlp)")
     out_tmpl = str(workdir / "yt_audio.%(ext)s")
-    subprocess.run(["yt-dlp", "-f", "bestaudio", "-x", "--audio-format", "m4a",
-                    "-o", out_tmpl, url], check=True, capture_output=True, text=True)
+    _run_checked_tool(
+        ["yt-dlp", "-f", "bestaudio", "-x", "--audio-format", "m4a",
+         "-o", out_tmpl, url],
+        "yt-dlp не смог скачать аудио")
     files = list(workdir.glob("yt_audio.*"))
     if not files:
         raise RunError("yt-dlp не скачал аудио")
@@ -336,9 +342,20 @@ def _ffprobe_duration(path: Path) -> float:
 
 
 def _to_wav16k(src: Path, dst: Path):
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
-                    "-ar", "16000", "-ac", "1", str(dst)],
-                   check=True, capture_output=True, text=True)
+    _run_checked_tool(
+        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
+         "-ar", "16000", "-ac", "1", str(dst)],
+        "ffmpeg не смог подготовить аудио")
+
+
+def _run_checked_tool(command: list[str], label: str) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise RunError(f"{label}: {detail or 'команда завершилась с ошибкой'}") from exc
+    except OSError as exc:
+        raise RunError(f"{label}: {exc}") from exc
 
 
 def _load_last_rtf(out_root: Path) -> float:
@@ -549,6 +566,9 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
     if not is_url and not Path(input).exists():
         raise RunError(f"файл не найден: {input}")
 
+    source_path = None if is_youtube else Path(input).resolve()
+    source_sig = None if source_path is None else source_signature(source_path)
+
     if out is not None:
         out_dir = Path(out)
     elif is_youtube:
@@ -594,7 +614,8 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
 
         generated = _now_iso()
         meta = {"source": (str(input) if is_youtube else Path(input).name),
-                "source_path": (None if is_youtube else str(Path(input).resolve())),
+                "source_path": (None if source_path is None else str(source_path)),
+                "source_signature": (None if source_sig is None else list(source_sig)),
                 "duration": duration,
                 "speakers": n_speakers, "language": result.language,
                 "engine": result.engine, "generated": generated,
@@ -607,6 +628,9 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
         (out_dir / "transcript.md").write_text(_render_md(meta, turns, multi))
         (out_dir / "transcript.json").write_text(json.dumps(
             {**meta, "turns": turns, "words": words}, ensure_ascii=False, indent=2))
+        for stale_fmt in ("srt", "vtt"):
+            if stale_fmt not in subtitle_formats:
+                (out_dir / f"transcript.{stale_fmt}").unlink(missing_ok=True)
         subtitle_paths = []
         for fmt in subtitle_formats:
             subtitle_path = out_dir / f"transcript.{fmt}"
