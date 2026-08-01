@@ -8,10 +8,10 @@ API keys. After the first run caches the models, the tool is fully offline.
 
 ## Execution model
 
-One invocation = one run: preflight, prepare audio, transcribe, exit. There
-is no daemon, no listening port, and no background state. A run is a single
-foreground process, so it cannot be "stuck" between calls, and a failed run
-never leaves a partial transcript behind as the deliverable.
+The normal invocation is one foreground run: preflight, prepare audio,
+transcribe, and exit. Batch mode repeats that same run sequentially for each
+source. Explicit `--watch DIR` is the only long-lived mode; it polls for stable
+media files and reuses the same run contract.
 
 The stages of a run, visible live in `progress.json`:
 
@@ -20,7 +20,7 @@ The stages of a run, visible live in `progress.json`:
 | `prep` | YouTube fetch (if needed) + convert to 16 kHz mono WAV via `ffmpeg` |
 | `asr` | speech recognition on the Apple Neural Engine (Parakeet TDT v3) |
 | `diar` | speaker diarization (only when `--speakers` is not `off`) |
-| `merge` | word timings + speaker segments merged into turns, artifacts written |
+| `merge` | word timings + speaker segments merged into turns, artifacts written; optional filler cleanup changes turns only |
 
 Stage detail lives in [engine.md](engine.md); the merge contract lives in
 [lib/run.py](../../lib/run.py) and [ADR-0002](../adr/ADR-0002-run-module.md).
@@ -36,14 +36,15 @@ hard error (exit 1) before any model work starts.
 
 ## Output contract
 
-Each run writes four files into the output directory:
+Once the output directory is known, a run writes three deliverables and a
+live-tracing file into the output directory:
 
 | File | Job |
 | --- | --- |
 | `transcript.md` | canonical reading file — turns by speaker, ready for AI agents |
 | `transcript.json` | machine-readable turns + word timings for exact time ranges |
 | `manifest.json` | run metadata — engine, source, duration, RTF, speaker count, command flags |
-| `progress.json` | live run tracing, updated every ~2 s, finalized `done` or `error` |
+| `progress.json` | live run tracing, finalized `done` or `error` once the tracker exists; preflight failures may leave none |
 
 `manifest.json` is the commit marker: it is written last, so its presence
 means the run completed. Shapes and reading rules: [output.md](output.md).

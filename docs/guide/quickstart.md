@@ -30,9 +30,27 @@ transcribe "https://www.youtube.com/watch?v=…" --speakers auto
 Audio is fetched with `yt-dlp`; the output directory is named from the real
 video title.
 
-## 4. Check what came back
+## 4. Batch or clean a run
 
-The run prints one summary line, and the directory contains four files:
+```bash
+transcribe call-a.wav call-b.m4a --out-root ~/Downloads/transcripts
+transcribe call.m4a --clean-fillers
+```
+
+Batch sources run sequentially; use `--out-root` because `--out` is for one
+source only. Filler cleanup changes readable turns but preserves raw word
+timings.
+
+To process an inbox as files arrive:
+
+```bash
+transcribe --watch ~/Downloads/inbox --out-root ~/Downloads/transcripts
+```
+
+## 5. Check what came back
+
+The run prints one summary line, and a successful run leaves three deliverables
+plus live progress in the directory:
 
 ```bash
 ✓ 3 спикер(ов) · 12:34 · ASR 61x · ru
@@ -46,7 +64,7 @@ The run prints one summary line, and the directory contains four files:
 - `manifest.json` — engine, language, duration, RTF, speaker count; read it
   before reporting metrics.
 
-## 5. Watch progress from another terminal
+## 6. Watch progress from another terminal
 
 ```bash
 transcribe status

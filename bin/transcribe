@@ -14,18 +14,23 @@
   transcribe status               последний активный прогон в <out-root>
   transcribe status --out DIR     прогон в конкретной папке
   transcribe status --json        машинный вывод вместо одной строки
+  transcribe status --max-age N   переопределить порог устаревания в секундах
 
 Использование:
-  transcribe <файл|youtube-url> [--speakers auto|off|N] [--lang ru|en|auto]
+  transcribe <файл|youtube-url>... [--speakers auto|off|N] [--lang ru|en|auto]
              [--out DIR] [--out-root DIR] [--diar-mode streaming|offline] [--asr-model v3|v2]
 """
 import argparse
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
-from run import DEFAULT_OUT_ROOT, RunError, format_duration, run, status, status_dict, status_line  # noqa: E402
+from run import (DEFAULT_OUT_ROOT, RunError, format_duration, is_processed, run,
+                 status, status_dict, status_line, watch_candidate)  # noqa: E402
+
+WATCH_INTERVAL_S = 10.0
 
 
 def cmd_status(argv) -> int:
@@ -35,18 +40,55 @@ def cmd_status(argv) -> int:
     p.add_argument("--out-root", default=None,
                    help=f"корень поиска последнего активного прогона (default {DEFAULT_OUT_ROOT})")
     p.add_argument("--json", action="store_true", help="машинный вывод")
-    p.add_argument("--max-age", type=float, default=60.0,
-                   help="считать прогон активным, пока progress.json не старше N сек (default 60)")
+    p.add_argument("--max-age", type=float, default=None,
+                   help="treat progress.json as stale after N seconds")
     args = p.parse_args(argv)
 
+    kwargs = {}
+    if args.max_age is not None:
+        kwargs["max_age_s"] = args.max_age
     st = status(Path(args.out) if args.out else None,
                 out_root=Path(args.out_root) if args.out_root else DEFAULT_OUT_ROOT,
-                max_age_s=args.max_age)
+                **kwargs)
     if args.json:
         print(status_dict(st))
     else:
         print(status_line(st))
     return 0
+
+
+def _print_result(result) -> None:
+    print(f"✓ {result.speakers} спикер(ов) · {format_duration(result.duration_s)}"
+          f" · ASR {result.asr_rtf}x · {result.language}")
+    print(f"  {result.transcript_md}")
+    print(f"  {result.transcript_json}")
+    print(f"  {result.manifest}")
+    if result.workdir is not None:
+        print(f"  отладочные файлы сохранены: {result.workdir}")
+
+
+def _watch(watch_dir: Path, *, out_root: Path, speakers: str, lang: str,
+           diar_mode: str, asr_model: str, keep_tmp: bool,
+           clean_fillers: bool) -> None:
+    stable = {}
+    blacklist = set()
+    while True:
+        for source in sorted(watch_dir.iterdir()):
+            if not watch_candidate(source, stable):
+                continue
+            key = source.resolve()
+            if key in blacklist or is_processed(source, out_root):
+                continue
+            try:
+                result = run(source, out_root=out_root, speakers=speakers, lang=lang,
+                             diar_mode=diar_mode, asr_model=asr_model,
+                             keep_tmp=keep_tmp, clean_fillers=clean_fillers)
+            except RunError as exc:
+                print(f"transcribe: error: {source}: {exc}", file=sys.stderr)
+                blacklist.add(key)
+                continue
+            _print_result(result)
+        time.sleep(WATCH_INTERVAL_S)
 
 
 def main():
@@ -55,7 +97,8 @@ def main():
 
     p = argparse.ArgumentParser(prog="transcribe", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("input", help="локальный медиафайл или YouTube-URL")
+    p.add_argument("inputs", nargs="*", help="локальные медиафайлы или YouTube-URL")
+    p.add_argument("--watch", metavar="DIR", help="следить за папкой с новыми медиафайлами")
     p.add_argument("--speakers", default="auto",
                    help="auto (детект) | off (без диаризации) | N (число спикеров)")
     p.add_argument("--lang", default="auto", help="ru | en | auto (по умолчанию auto)")
@@ -66,26 +109,49 @@ def main():
                    help="streaming (быстро, ~61x) | offline (точнее DER, медленно)")
     p.add_argument("--asr-model", default="v3", choices=["v3", "v2"])
     p.add_argument("--keep-tmp", action="store_true")
+    p.add_argument("--clean-fillers", action="store_true",
+                   help="удалять консервативный список слов-паразитов из реплик")
     args = p.parse_args()
 
-    try:
-        r = run(args.input,
-                out=Path(args.out) if args.out else None,
-                out_root=Path(args.out_root) if args.out_root else DEFAULT_OUT_ROOT,
-                speakers=args.speakers, lang=args.lang,
-                diar_mode=args.diar_mode, asr_model=args.asr_model,
-                keep_tmp=args.keep_tmp)
-    except RunError as exc:
-        print(f"transcribe: error: {exc}", file=sys.stderr)
-        sys.exit(1)
+    if args.watch:
+        if args.inputs:
+            p.error("--watch нельзя использовать вместе с источниками")
+        if args.out:
+            p.error("--out нельзя использовать с --watch; укажите --out-root")
+        watch_dir = Path(args.watch)
+        if not watch_dir.is_dir():
+            p.error(f"папка watch не найдена: {watch_dir}")
+        out_root = Path(args.out_root) if args.out_root else watch_dir
+        try:
+            _watch(watch_dir, out_root=out_root, speakers=args.speakers, lang=args.lang,
+                   diar_mode=args.diar_mode, asr_model=args.asr_model,
+                   keep_tmp=args.keep_tmp, clean_fillers=args.clean_fillers)
+        except KeyboardInterrupt:
+            return
 
-    print(f"✓ {r.speakers} спикер(ов) · {format_duration(r.duration_s)}"
-          f" · ASR {r.asr_rtf}x · {r.language}")
-    print(f"  {r.transcript_md}")
-    print(f"  {r.transcript_json}")
-    print(f"  {r.manifest}")
-    if r.workdir is not None:
-        print(f"  отладочные файлы сохранены: {r.workdir}")
+    if not args.inputs:
+        p.error("укажите хотя бы один источник")
+    if len(args.inputs) > 1 and args.out:
+        p.error("--out нельзя использовать с несколькими источниками; укажите --out-root")
+
+    failed = False
+    for source in args.inputs:
+        try:
+            r = run(source,
+                    out=Path(args.out) if args.out else None,
+                    out_root=Path(args.out_root) if args.out_root else DEFAULT_OUT_ROOT,
+                    speakers=args.speakers, lang=args.lang,
+                    diar_mode=args.diar_mode, asr_model=args.asr_model,
+                    keep_tmp=args.keep_tmp, clean_fillers=args.clean_fillers)
+        except RunError as exc:
+            print(f"transcribe: error: {source}: {exc}", file=sys.stderr)
+            failed = True
+            continue
+
+        _print_result(r)
+
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

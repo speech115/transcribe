@@ -36,6 +36,8 @@ shape, speaker labeling, and transcription quality.
    contents into chat.
 3. Run `transcribe <source> --speakers auto`. Keep automatic language detection
    unless the user explicitly requests a language.
+   For several sources, pass them in one invocation with `--out-root`; use
+   `--watch DIR` only when the user explicitly wants folder monitoring.
 4. Verify that `transcript.md`, `transcript.json`, and `manifest.json` exist and
    are non-empty. For multi-speaker output, confirm that speaker labels are not
    blank.
@@ -54,9 +56,11 @@ shape, speaker labeling, and transcription quality.
 
 ## Progress tracking (по запросу)
 
-Every run writes a live-tracing file `progress.json` next to the transcript
-artifacts, updated roughly every 2 seconds, and finalized as `done` or `error`
-when the run finishes. It holds `status`, `stage` (`prep`/`asr`/`diar`/`merge`),
+Once the output directory is known, a run writes a live-tracing file
+`progress.json` next to the transcript artifacts, updated roughly every 2
+seconds, and finalized as `done` or `error` when the run finishes. Preflight
+and source-validation failures before the tracker exists may leave no progress
+file. It holds `status`, `stage` (`prep`/`asr`/`diar`/`merge`),
 `pct`, `eta_s`, `elapsed_s`, `rtf`, `pid`, `source`, and (on completion)
 `out_dir`, `speakers`, `transcript_md`.
 
@@ -66,6 +70,7 @@ Agent-facing status command:
 transcribe status                     # последний прогон в <out-root> (default ~/Downloads/transcripts)
 transcribe status --out <out-dir>     # конкретный прогон
 transcribe status --json              # машинный вывод для программной обработки
+transcribe status --max-age <seconds> # override the stale-running threshold
 ```
 
 - Running run prints e.g. `🎙 ASR 47% · ETA 01:18 · elapsed 02:30 · <source>`.
@@ -102,7 +107,7 @@ Every run writes:
 - `transcript.md` — canonical transcript deliverable; read it first for follow-up agent work.
 - `transcript.json` — structured turns and word timings for exact time ranges.
 - `manifest.json` — engine, source, timings, RTF, speaker count, and run metadata.
-- `progress.json` — live run tracing (status/stage/pct/ETA); finalized `done` or `error`.
+- `progress.json` — live run tracing (status/stage/pct/ETA); finalized `done` or `error` once the tracker exists.
 - Language is auto-detected and written as `ru`, `en`, `mixed`, or `auto`.
 
 Default reading rule for simple transcription: do not read the transcript after generation; report its path. Read `transcript.md` only when doing follow-up agent work such as summary, cleanup, extraction, or QA. Open `transcript.json` only when exact timestamps, word-level slicing, or programmatic post-processing is needed.
@@ -143,6 +148,14 @@ database directly, or assume that an installed `.app` means its CLI is healthy.
 - `--diar-mode streaming` is the default and fast.
 - `--diar-mode offline` is slower; use only when diarization quality is clearly more important than speed.
 - `--keep-tmp` preserves raw ASR/diarization JSON for debugging.
+- `--clean-fillers` removes conservative language-aware hesitation words from
+  turns while keeping raw `words` and their timings unchanged.
+- Multiple positional sources run sequentially under `--out-root`; a failed
+  source is reported and the remaining sources still run, with exit 1 at the
+  end if any source failed. `--out` is single-source only.
+- `--watch DIR` polls for stable `.mp3`, `.wav`, `.m4a`, `.ogg`, `.opus`,
+  `.mov`, and `.mp4` files. It skips completed outputs, ignores hidden/temp
+  files, and stops cleanly on Ctrl-C.
 
 ## Guardrails
 

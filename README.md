@@ -35,10 +35,14 @@ Skill lineage: this CLI is the engine behind the `transcribe` agent skill
 
 ## Features
 
-- **One command, one run** — `transcribe <source>` is a single foreground
-  process: preflight, prepare audio, recognize, diarize, merge, write
-  artifacts, exit. No daemons, no background state. Stages
-  (`prep` → `asr` → `diar` → `merge`) are traced live in `progress.json`.
+- **One command, one run** — a normal `transcribe <source>` invocation is a
+  single foreground process: prepare audio, recognize, diarize, merge, write
+  artifacts, exit. Stages (`prep` → `asr` → `diar` → `merge`) are traced live
+  in `progress.json`.
+- **Batch and watched folders** — pass several sources for sequential batch
+  transcription, or use explicit `--watch DIR` polling for dropped media.
+- **Clean turns** — `--clean-fillers` removes a conservative language-aware
+  list from turns while preserving raw word timings.
 - **Speaker diarization** — `--speakers auto` detects the speaker count,
   `--speakers N` forces it, `--speakers off` disables it for monologues.
   Fast streaming mode by default; an offline mode for accuracy.
@@ -95,7 +99,13 @@ transcribe video.mp4 --speakers 2 --out ~/Downloads/transcripts/video
 # 3. Transcribe a YouTube video (named by the real video title)
 transcribe "https://www.youtube.com/watch?v=…" --speakers auto
 
-# 4. Watch a run from another terminal
+# 4. Transcribe several sources sequentially
+transcribe call-a.wav call-b.m4a --out-root ~/Downloads/transcripts
+
+# 5. Watch a folder for new media
+transcribe --watch ~/Downloads/inbox --out-root ~/Downloads/transcripts
+
+# 6. Watch a run from another terminal
 transcribe status
 transcribe status --json        # machine-readable
 ```
@@ -126,9 +136,12 @@ per-invocation flags:
 | `--lang ru\|en\|auto` | `auto` | force a language or auto-detect |
 | `--out DIR` | — | explicit output directory for this run |
 | `--out-root DIR` | `~/Downloads/transcripts` | root for default output naming |
+| `--clean-fillers` | off | remove conservative filler words from turns; raw words stay unchanged |
+| `--watch DIR` | — | poll a folder for stable new media; mutually exclusive with inputs and `--out` |
 | `--diar-mode streaming\|offline` | `streaming` | fast diarization, or slower and more accurate |
 | `--asr-model v3\|v2` | `v3` | Parakeet model generation |
 | `--keep-tmp` | off | keep raw ASR/diarization JSON for debugging |
+| `status --max-age N` | `60` | stale threshold for a running `progress.json` |
 
 If neither `--out` nor `--out-root` is given, output goes to
 `~/Downloads/transcripts/<title>` — the file name without extension for
@@ -140,20 +153,23 @@ numeric suffix (`call`, `call-2`, …).
 | Code | Meaning |
 | --- | --- |
 | 0 | success |
-| 1 | run error (missing tool, missing file, unsupported URL, engine failure) |
+| 1 | run error (including any failed source in a batch) |
 | 2 | argument parsing error |
 
 ## Output
 
-Each run writes four files into the output directory:
+Once the output directory is known, a run writes three deliverables and a
+live-tracing file into the output directory:
 
 - `transcript.md` — canonical reading file: turns by speaker (`S1..Sn`),
   ready for AI agents.
-- `transcript.json` — structured turns and word timings.
-- `manifest.json` — engine, source, duration, RTF, speaker count, and run
-  metadata; written last, so its presence means the run completed.
-- `progress.json` — live run tracing, updated every ~2 s, finalized
-  `done`/`error`.
+- `transcript.json` — structured turns and raw word timings. With
+  `--clean-fillers`, only the turn text is cleaned.
+- `manifest.json` — engine, source, duration, RTF, speaker count, cleanup flag,
+  and run metadata; written last, so its presence means the run completed.
+- `progress.json` — live run tracing, updated every ~2 s and finalized
+  `done`/`error`; preflight failures before the tracker exists may leave no
+  progress file.
 
 For a simple "transcribe this" request, report the `transcript.md` path and
 compact metrics from `manifest.json`. Read `transcript.md` only for
@@ -165,8 +181,11 @@ only for exact timestamps or programmatic slicing. Details:
 
 v0.4, in daily local use. CI runs `pytest` on Linux and macOS for every
 push and pull request ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
-The suite is pure-stdlib: 43 tests over the engine seam, the language
-resolution chain, the merge, and the run contract — no engine binary needed.
+The suite is pure-stdlib and covers the engine seam, the language resolution
+chain, the merge, the corpus collector, and the run contract — no engine
+binary needed.
+`transcribe status --max-age N` overrides the 60-second stale threshold; when
+omitted, the status contract supplies that default.
 
 ## Contributing
 
