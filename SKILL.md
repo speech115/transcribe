@@ -56,11 +56,9 @@ shape, speaker labeling, and transcription quality.
 
 ## Progress tracking (по запросу)
 
-Once the output directory is known, a run writes a live-tracing file
-`progress.json` next to the transcript artifacts, updated roughly every 2
-seconds, and finalized as `done` or `error` when the run finishes. Preflight
-and source-validation failures before the tracker exists may leave no progress
-file. It holds `status`, `stage` (`prep`/`asr`/`diar`/`merge`),
+Every run writes a live-tracing file `progress.json` next to the transcript
+artifacts, updated roughly every 2 seconds, and finalized as `done` or `error`
+when the run finishes. It holds `status`, `stage` (`prep`/`asr`/`diar`/`merge`),
 `pct`, `eta_s`, `elapsed_s`, `rtf`, `pid`, `source`, and (on completion)
 `out_dir`, `speakers`, `transcript_md`.
 
@@ -70,7 +68,6 @@ Agent-facing status command:
 transcribe status                     # последний прогон в <out-root> (default ~/Downloads/transcripts)
 transcribe status --out <out-dir>     # конкретный прогон
 transcribe status --json              # машинный вывод для программной обработки
-transcribe status --max-age <seconds> # override the stale-running threshold
 ```
 
 - Running run prints e.g. `🎙 ASR 47% · ETA 01:18 · elapsed 02:30 · <source>`.
@@ -107,7 +104,7 @@ Every run writes:
 - `transcript.md` — canonical transcript deliverable; read it first for follow-up agent work.
 - `transcript.json` — structured turns and word timings for exact time ranges.
 - `manifest.json` — engine, source, timings, RTF, speaker count, and run metadata.
-- `progress.json` — live run tracing (status/stage/pct/ETA); finalized `done` or `error` once the tracker exists.
+- `progress.json` — live run tracing (status/stage/pct/ETA); finalized `done` or `error`.
 - Language is auto-detected and written as `ru`, `en`, `mixed`, or `auto`.
 
 Default reading rule for simple transcription: do not read the transcript after generation; report its path. Read `transcript.md` only when doing follow-up agent work such as summary, cleanup, extraction, or QA. Open `transcript.json` only when exact timestamps, word-level slicing, or programmatic post-processing is needed.

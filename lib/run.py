@@ -15,11 +15,9 @@ import sys
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, ClassVar
-from urllib.parse import urlparse
 
 from engine import EngineError, FluidAudioEngine
 from merge import merge_words_to_turns
@@ -29,10 +27,7 @@ STALE_S = 60.0
 PROGRESS_NAME = "progress.json"
 WATCH_EXTENSIONS = frozenset({".mp3", ".wav", ".m4a", ".ogg", ".opus", ".mov", ".mp4"})
 WATCH_TEMP_SUFFIXES = frozenset({".part", ".tmp"})
-YOUTUBE_HOSTS = frozenset({
-    "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com",
-    "youtu.be", "www.youtu.be",
-})
+YT_RE = re.compile(r"(youtube\.com|youtu\.be)", re.I)
 BAD_PATH_CHARS_RE = re.compile(r"[\x00-\x1f/:]+")
 
 
@@ -68,6 +63,7 @@ def is_processed(source: Path, out_root: Path) -> bool:
     base = root / safe_folder_name(source.stem)
     candidates = [base]
     try:
+        candidates.extend(sorted(root.glob(f"{base.name} (*)")))
         candidates.extend(sorted(root.glob(f"{base.name}-*")))
     except OSError:
         return False
@@ -87,14 +83,14 @@ def is_processed(source: Path, out_root: Path) -> bool:
 
 
 def unique_dir(path: Path) -> Path:
-    """Return path, or path-2, path-3, ... when path already exists."""
+    """Return path, or path (2), path (3), ... when path already exists."""
     if not path.exists():
         return path
     parent = path.parent
     stem = path.name
     index = 2
     while True:
-        candidate = parent / f"{stem}-{index}"
+        candidate = parent / f"{stem} ({index})"
         if not candidate.exists():
             return candidate
         index += 1
@@ -115,16 +111,6 @@ class RunResult:
     asr_rtf: float | None
     language: str
     workdir: Path | None = None
-
-
-@dataclass(frozen=True)
-class PreparedSource:
-    """Prepared source: where to write artifacts and what to transcribe."""
-    out_dir: Path
-    wav: Path
-    duration: float
-    source_label: str
-    prep_s: float
 
 
 @dataclass(frozen=True)
@@ -251,62 +237,12 @@ def status_dict(st: Status) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# run() owns the full run. Test seams are _prepare_source (the main source
-# preparation seam) and _ENGINE_FACTORY. Prep helpers (_youtube_title,
-# _fetch_youtube_audio, _ffprobe_duration, _to_wav16k) stay behind that seam.
+# run() — полный прогон. Внутренние швы для тестов: _ENGINE_FACTORY,
+# _ffprobe_duration, _to_wav16k, _fetch_youtube_audio, _youtube_title.
 # ---------------------------------------------------------------------------
 
 DEFAULT_OUT_ROOT = Path("/Users/sereja/Downloads/transcripts")
 FLUID = Path(__file__).resolve().parent.parent / "vendor" / "fluidaudiocli"
-
-
-@dataclass(frozen=True)
-class Manifest:
-    """Schema for manifest.json: the single interface for writers and readers.
-
-    Field order in to_dict() also defines the corpus-row order.
-    """
-    source: str | None
-    duration: float | None
-    speakers: int | None
-    language: str | None
-    engine: str | None
-    generated: str | None
-    out_dir: str | None
-    timings_s: dict | None
-    asr_rtf: float | None
-    asr_model: str | None
-    diar_mode: str | None
-    speakers_arg: str | None
-    words: int | None
-    turns: int | None
-    engine_binary: str | None
-    clean_fillers: bool | None = None
-    status: str | None = None
-    CORPUS_FIELDS: ClassVar[tuple[str, ...]] = (
-        "source", "duration", "speakers", "language", "engine", "generated",
-        "out_dir", "asr_rtf", "asr_model", "diar_mode", "speakers_arg",
-        "words", "turns", "engine_binary",
-    )
-
-    def to_dict(self) -> dict:
-        return {f.name: getattr(self, f.name) for f in fields(self)}
-
-    @classmethod
-    def from_dict(cls, m: dict) -> "Manifest":
-        """Fill missing keys with None so old manifests remain readable."""
-        return cls(**{f.name: m.get(f.name) for f in fields(cls)})
-
-    def to_corpus_row(self, manifest_path: Path) -> dict:
-        """Project run fields, timings, and measured RTF into one corpus row."""
-        row = {name: getattr(self, name) for name in self.CORPUS_FIELDS}
-        t = self.timings_s or {}
-        for k in ("prep_s", "asr_s", "diar_s"):
-            row[k] = t.get(k)
-        if self.duration and row.get("asr_s"):
-            row["measured_rtf"] = round(self.duration / row["asr_s"], 2)
-        row["manifest_path"] = str(manifest_path)
-        return row
 
 
 def _youtube_title(url: str) -> str:
@@ -316,8 +252,8 @@ def _youtube_title(url: str) -> str:
         title = subprocess.run(
             ["yt-dlp", "--skip-download", "--print", "%(title)s", url],
             check=True, capture_output=True, text=True).stdout.strip()
-    except (OSError, subprocess.CalledProcessError) as exc:
-        msg = (getattr(exc, "stderr", "") or getattr(exc, "stdout", "") or "").strip()
+    except subprocess.CalledProcessError as exc:
+        msg = (exc.stderr or exc.stdout or "").strip()
         raise RunError(f"не удалось получить название YouTube-видео: {msg or url}") from exc
     return title
 
@@ -326,12 +262,8 @@ def _fetch_youtube_audio(url: str, workdir: Path) -> Path:
     if not shutil.which("yt-dlp"):
         raise RunError("для YouTube нужен yt-dlp (brew install yt-dlp)")
     out_tmpl = str(workdir / "yt_audio.%(ext)s")
-    try:
-        subprocess.run(["yt-dlp", "-f", "bestaudio", "-x", "--audio-format", "m4a",
-                        "-o", out_tmpl, url], check=True, capture_output=True, text=True)
-    except (OSError, subprocess.CalledProcessError) as exc:
-        msg = (getattr(exc, "stderr", "") or getattr(exc, "stdout", "") or "").strip()
-        raise RunError(f"yt-dlp не скачал аудио: {msg or url}") from exc
+    subprocess.run(["yt-dlp", "-f", "bestaudio", "-x", "--audio-format", "m4a",
+                    "-o", out_tmpl, url], check=True, capture_output=True, text=True)
     files = list(workdir.glob("yt_audio.*"))
     if not files:
         raise RunError("yt-dlp не скачал аудио")
@@ -345,77 +277,14 @@ def _ffprobe_duration(path: Path) -> float:
              "format=duration", "-of", "csv=p=0", str(path)],
             check=True, capture_output=True, text=True).stdout.strip()
         return float(out)
-    except Exception as exc:
-        detail = (getattr(exc, "stderr", "") or "").strip()[:200]
-        raise RunError(f"ffprobe не смог прочитать аудио {path}: {detail or exc}") from exc
+    except Exception:
+        return 0.0
 
 
 def _to_wav16k(src: Path, dst: Path):
-    try:
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
-                        "-ar", "16000", "-ac", "1", str(dst)],
-                       check=True, capture_output=True, text=True)
-    except (OSError, subprocess.CalledProcessError) as exc:
-        msg = (getattr(exc, "stderr", "") or "").strip()[:300]
-        raise RunError(f"ffmpeg не смог сконвертировать аудио: {msg or src}") from exc
-
-
-def _is_youtube_url(source: str) -> bool:
-    """Return true only for supported YouTube hostnames and web schemes."""
-    try:
-        parsed = urlparse(source)
-    except ValueError:
-        return False
-    host = (parsed.hostname or "").lower().rstrip(".")
-    return parsed.scheme.lower() in {"http", "https"} and host in YOUTUBE_HOSTS
-
-
-def _prepare_source(source, *, out: Path | None, out_root: Path | None,
-                    workdir: Path,
-                    on_out_dir: Callable[[Path], None] | None = None,
-                    on_src_duration: Callable[[float], None] | None = None) -> PreparedSource:
-    """Prepare a source into an output directory and audio_16k.wav.
-
-    Owns local/YouTube branching, directory naming, and the full audio
-    chain (yt-dlp, ffprobe, ffmpeg); failures are reported as RunError.
-    on_out_dir runs after naming and before fetch so the tracker exists before
-    the long download; on_src_duration runs after probing the source and
-    before conversion so prep ETA can use the duration.
-    """
-    for tool in ("ffmpeg", "ffprobe"):
-        if not shutil.which(tool):
-            raise RunError(f"требуется {tool}")
-
-    t0 = time.time()
-    source_text = str(source)
-    is_url = "://" in source_text
-    is_youtube = is_url and _is_youtube_url(source_text)
-    if is_url and not is_youtube:
-        raise RunError("поддерживаются локальные файлы и YouTube-ссылки")
-    if not is_url and not Path(source).exists():
-        raise RunError(f"файл не найден: {source}")
-
-    if out is not None:
-        out_dir = Path(out)
-    elif is_youtube:
-        title = _youtube_title(str(source))
-        out_dir = unique_dir(Path(out_root) / safe_folder_name(title, "youtube"))
-    else:
-        out_dir = unique_dir(Path(out_root) / safe_folder_name(Path(source).stem))
-    if on_out_dir is not None:
-        on_out_dir(out_dir)
-
-    src = _fetch_youtube_audio(str(source), workdir) if is_youtube else Path(source)
-    wav = workdir / "audio_16k.wav"
-    src_duration = _ffprobe_duration(src)
-    if on_src_duration is not None:
-        on_src_duration(src_duration)
-    _to_wav16k(src, wav)
-    duration = _ffprobe_duration(wav)
-    prep_s = round(time.time() - t0, 1)
-    return PreparedSource(out_dir=out_dir, wav=wav, duration=duration,
-                          source_label=str(source) if is_youtube else Path(source).name,
-                          prep_s=prep_s)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
+                    "-ar", "16000", "-ac", "1", str(dst)],
+                   check=True, capture_output=True, text=True)
 
 
 def _load_last_rtf(out_root: Path) -> float:
@@ -423,7 +292,7 @@ def _load_last_rtf(out_root: Path) -> float:
     best = None
     for m in out_root.rglob("manifest.json"):
         try:
-            rtf = Manifest.from_dict(json.loads(m.read_text())).asr_rtf
+            rtf = json.loads(m.read_text()).get("asr_rtf")
         except Exception:
             continue
         if isinstance(rtf, (int, float)) and rtf > 0:
@@ -537,15 +406,6 @@ def _render_md(meta: dict, turns: list, multi: bool) -> str:
     return "\n".join(fm + body).rstrip() + "\n"
 
 
-def _clear_run_markers(out_dir: Path) -> None:
-    """Remove markers from an explicit output before starting a new run."""
-    for name in ("manifest.json", PROGRESS_NAME):
-        try:
-            (out_dir / name).unlink()
-        except FileNotFoundError:
-            pass
-
-
 def run(input, *, out: Path | None = None, out_root: Path | None = None,
         speakers: str = "auto", lang: str = "auto", diar_mode: str = "streaming",
         asr_model: str = "v3", keep_tmp: bool = False,
@@ -553,34 +413,46 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
     """Полный прогон: preflight → prep → asr → диаризация → merge → артефакты."""
     if not FLUID.exists():
         raise RunError(f"не найден движок: {FLUID}")
+    for tool in ("ffmpeg", "ffprobe"):
+        if not shutil.which(tool):
+            raise RunError(f"требуется {tool}")
     if out is None and out_root is None:
         raise RunError("укажите --out или --out-root")
+
+    is_url = "://" in str(input)
+    is_youtube = is_url and YT_RE.search(str(input))
+    if is_url and not is_youtube:
+        raise RunError("поддерживаются локальные файлы и YouTube-ссылки")
+    if not is_url and not Path(input).exists():
+        raise RunError(f"файл не найден: {input}")
+
     if out is not None:
-        _clear_run_markers(Path(out))
+        out_dir = Path(out)
+    elif is_youtube:
+        out_dir = unique_dir(Path(out_root) / safe_folder_name(_youtube_title(str(input)), "youtube"))
+    else:
+        out_dir = unique_dir(Path(out_root) / safe_folder_name(Path(input).stem))
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     workdir = Path(tempfile.mkdtemp(prefix="transcribe_"))
     timings = {}
-    tracker = None
     try:
-        def _on_out_dir(out_dir: Path):
-            nonlocal tracker
-            out_dir.mkdir(parents=True, exist_ok=True)
-            tracker = _Tracker(out_dir / PROGRESS_NAME, str(input))
-            tracker.set(stage="prep")
-            tracker.start()
+        progress = _Tracker(out_dir / PROGRESS_NAME, str(input))
+        progress.set(stage="prep")
+        progress.start()
 
-        prepared = _prepare_source(str(input), out=out, out_root=out_root,
-                                   workdir=workdir,
-                                   on_out_dir=_on_out_dir,
-                                   on_src_duration=lambda d: tracker.set(duration=d))
-        out_dir = prepared.out_dir
-        timings["prep_s"] = prepared.prep_s
-        duration = prepared.duration
+        src = _fetch_youtube_audio(str(input), workdir) if is_youtube else Path(input)
+        wav = workdir / "audio_16k.wav"
+        t0 = time.time()
+        progress.set(duration=_ffprobe_duration(src))
+        _to_wav16k(src, wav)
+        timings["prep_s"] = round(time.time() - t0, 1)
+        duration = _ffprobe_duration(wav)
 
-        tracker.set(duration=duration, rtf=_load_last_rtf(out_dir.parent))
+        progress.set(duration=duration, rtf=_load_last_rtf(out_dir.parent))
         engine = _ENGINE_FACTORY(FLUID, asr_model, diar_mode)
-        result = engine.transcribe(prepared.wav, lang=lang, speakers=speakers,
-                                   on_stage=lambda s: tracker.set(stage=s))
+        result = engine.transcribe(wav, lang=lang, speakers=speakers,
+                                   on_stage=lambda s: progress.set(stage=s))
         timings["asr_s"] = round(result.timings.asr_s, 1)
         timings["diar_s"] = (round(result.timings.diar_s, 1)
                              if result.timings.diar_s is not None else None)
@@ -588,13 +460,14 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
         n_speakers = max(result.speakers, 1)
         multi = n_speakers > 1
 
-        tracker.set(stage="merge")
+        progress.set(stage="merge")
         turns = merge_words_to_turns(words, result.segments,
                                      clean_fillers=clean_fillers,
                                      lang=result.language)
 
         generated = _now_iso()
-        meta = {"source": prepared.source_label, "duration": duration,
+        meta = {"source": (str(input) if is_youtube else Path(input).name),
+                "duration": duration,
                 "speakers": n_speakers, "language": result.language,
                 "engine": result.engine, "generated": generated,
                 "clean_fillers": clean_fillers}
@@ -605,17 +478,17 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
 
         rtf = (round(duration / timings["asr_s"], 1)
                if duration > 0 and timings["asr_s"] > 0 else None)
-        manifest = Manifest(**meta, out_dir=str(out_dir), timings_s=timings,
-                            asr_rtf=rtf, asr_model=asr_model,
-                            diar_mode=result.diar_mode, speakers_arg=speakers,
-                            words=len(words), turns=len(turns),
-                            engine_binary=str(FLUID), status="done")
+        manifest = {**meta, "out_dir": str(out_dir), "timings_s": timings,
+                    "asr_rtf": rtf, "asr_model": asr_model,
+                    "diar_mode": result.diar_mode,
+                    "speakers_arg": speakers, "words": len(words), "turns": len(turns),
+                    "engine_binary": str(FLUID)}
         (out_dir / "manifest.json").write_text(json.dumps(
-            manifest.to_dict(), ensure_ascii=False, indent=2))
+            manifest, ensure_ascii=False, indent=2))
 
-        tracker.finish("done", out_dir=str(out_dir), speakers=n_speakers,
-                       language=result.language, duration=duration, pct=100, eta_s=0,
-                       transcript_md=str(out_dir / "transcript.md"))
+        progress.finish("done", out_dir=str(out_dir), speakers=n_speakers,
+                        language=result.language, duration=duration, pct=100, eta_s=0,
+                        transcript_md=str(out_dir / "transcript.md"))
 
         return RunResult(out_dir=out_dir,
                          transcript_md=out_dir / "transcript.md",
@@ -625,12 +498,10 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
                          asr_rtf=rtf, language=result.language,
                          workdir=(workdir if keep_tmp else None))
     except EngineError as exc:
-        if tracker is not None:
-            tracker.finish("error", error=str(exc))
+        progress.finish("error", error=str(exc))
         raise RunError(str(exc)) from exc
     except Exception as exc:
-        if tracker is not None:
-            tracker.finish("error", error=str(exc))
+        progress.finish("error", error=str(exc))
         raise
     finally:
         if not keep_tmp:

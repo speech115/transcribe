@@ -1,8 +1,7 @@
 # Output
 
-Once the output directory is known, a run writes three deliverables and a
-live-tracing file into the output directory. Preflight and source-validation
-failures before the tracker exists may leave no `progress.json`.
+Every run writes three deliverables and a live-tracing file into the output
+directory.
 
 ## transcript.md
 
@@ -57,7 +56,6 @@ processing speed, or speaker count.
 | `language` | resolved label: `ru`, `en`, `mixed`, `auto` |
 | `engine` | engine display name |
 | `generated` | ISO timestamp of the run |
-| `status` | terminal manifest status (`done`) |
 | `clean_fillers` | whether filler cleanup was enabled for turns |
 | `out_dir` | artifact directory |
 | `timings_s` | `prep_s`, `asr_s`, `diar_s` (may be null) |
@@ -75,12 +73,10 @@ original timings.
 ## progress.json
 
 Live run tracing, updated roughly every 2 seconds and finalized as `done`
-or `error` once the tracker exists. Holds `status`, `stage` (`prep`/`asr`/`diar`/`merge`), `pct`,
+or `error`. Holds `status`, `stage` (`prep`/`asr`/`diar`/`merge`), `pct`,
 `eta_s`, `elapsed_s`, `rtf`, `pid`, `source`, and on completion `out_dir`,
 `speakers`, `language`, `duration`, `transcript_md`. The final status is
 sticky; a corrupt file reports as `degraded`, never as a silent idle.
-`transcribe status --max-age N` controls when a running file is considered
-stale; the default is 60 seconds.
 See [status.md](status.md) for the agent-facing way to read it.
 
 ## Reading rules

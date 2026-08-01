@@ -14,7 +14,6 @@
   transcribe status               последний активный прогон в <out-root>
   transcribe status --out DIR     прогон в конкретной папке
   transcribe status --json        машинный вывод вместо одной строки
-  transcribe status --max-age N   переопределить порог устаревания в секундах
 
 Использование:
   transcribe <файл|youtube-url>... [--speakers auto|off|N] [--lang ru|en|auto]
@@ -40,16 +39,13 @@ def cmd_status(argv) -> int:
     p.add_argument("--out-root", default=None,
                    help=f"корень поиска последнего активного прогона (default {DEFAULT_OUT_ROOT})")
     p.add_argument("--json", action="store_true", help="машинный вывод")
-    p.add_argument("--max-age", type=float, default=None,
-                   help="treat progress.json as stale after N seconds")
+    p.add_argument("--max-age", type=float, default=60.0,
+                   help="считать прогон активным, пока progress.json не старше N сек (default 60)")
     args = p.parse_args(argv)
 
-    kwargs = {}
-    if args.max_age is not None:
-        kwargs["max_age_s"] = args.max_age
     st = status(Path(args.out) if args.out else None,
                 out_root=Path(args.out_root) if args.out_root else DEFAULT_OUT_ROOT,
-                **kwargs)
+                max_age_s=args.max_age)
     if args.json:
         print(status_dict(st))
     else:

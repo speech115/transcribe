@@ -36,15 +36,15 @@ hard error (exit 1) before any model work starts.
 
 ## Output contract
 
-Once the output directory is known, a run writes three deliverables and a
-live-tracing file into the output directory:
+Each run writes three deliverables and a live-tracing file into the output
+directory:
 
 | File | Job |
 | --- | --- |
 | `transcript.md` | canonical reading file — turns by speaker, ready for AI agents |
 | `transcript.json` | machine-readable turns + word timings for exact time ranges |
 | `manifest.json` | run metadata — engine, source, duration, RTF, speaker count, command flags |
-| `progress.json` | live run tracing, finalized `done` or `error` once the tracker exists; preflight failures may leave none |
+| `progress.json` | live run tracing, finalized `done` or `error` |
 
 `manifest.json` is the commit marker: it is written last, so its presence
 means the run completed. Shapes and reading rules: [output.md](output.md).

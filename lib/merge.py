@@ -15,7 +15,7 @@ _RU_FILLER_RE = re.compile(r"(?i)(?<!\w)(?:э(?:-э)?|м-м|мм|хм|ну)(?!\w
 _CONTEXTUAL_LIKE_RE = re.compile(r"(?i)(?<!\w)like(?=\s*[,;:!?])\s*[,;:!?]?")
 
 
-def _clean_fillers_text(text: str, lang: str) -> str:
+def clean_fillers_text(text: str, lang: str) -> str:
     """Remove conservative hesitation words while preserving meaningful words."""
     if not text:
         return text
@@ -39,7 +39,7 @@ def _clean_fillers_text(text: str, lang: str) -> str:
     return cleaned.strip()
 
 
-clean_fillers = _clean_fillers_text
+clean_fillers = clean_fillers_text
 
 
 def assign_speaker(
@@ -120,6 +120,6 @@ def merge_words_to_turns(
             )
     if clean_fillers:
         for turn in turns:
-            turn["text"] = _clean_fillers_text(turn["text"], lang)
+            turn["text"] = clean_fillers_text(turn["text"], lang)
         turns = [turn for turn in turns if turn["text"]]
     return turns

@@ -10,7 +10,7 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
-from run import RunError, RunResult, Status
+from run import RunError, RunResult
 
 BIN = Path(__file__).resolve().parent.parent / "bin" / "transcribe"
 
@@ -21,36 +21,6 @@ def _load_cli():
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
     return mod
-
-
-def test_cli_status_forwards_only_explicit_max_age():
-    cli = _load_cli()
-    calls = []
-    original = cli.status
-
-    def recorder(out_dir=None, *, out_root=None, **kwargs):
-        calls.append(kwargs)
-        return Status(kind="idle")
-
-    cli.status = recorder
-    original_argv = sys.argv[:]
-    try:
-        sys.argv = ["transcribe", "status"]
-        try:
-            cli.main()
-        except SystemExit as exc:
-            assert exc.code == 0
-        sys.argv = ["transcribe", "status", "--max-age", "30"]
-        try:
-            cli.main()
-        except SystemExit as exc:
-            assert exc.code == 0
-    finally:
-        cli.status = original
-        sys.argv = original_argv
-
-    assert calls[0] == {}
-    assert calls[1] == {"max_age_s": 30.0}
 
 
 def test_cli_batch_continues_after_one_source_error():

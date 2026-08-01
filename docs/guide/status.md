@@ -18,9 +18,6 @@ Flags:
 | `--json` | off | structured output instead of a human line |
 | `--max-age N` | `60` | seconds after which `progress.json` counts as stale (`idle`) |
 
-When `--max-age` is omitted, the `status()` contract supplies the 60-second
-default; the CLI forwards only an explicit override.
-
 ## Output lines
 
 - Running: `🎙 ASR 47% · ETA 01:18 · elapsed 02:30 · <source>`

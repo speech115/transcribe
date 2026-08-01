@@ -20,9 +20,6 @@ transcribe <file-or-youtube-url>... [flags]
 | `--asr-model v3\|v2` | `v3` | Parakeet model generation |
 | `--keep-tmp` | off | keep the scratch directory (raw ASR/diarization JSON) for debugging |
 
-The `transcribe status` flags, including the optional `--max-age` override,
-are documented in [status.md](status.md).
-
 Language is auto-detected by default; force `--lang ru` or `--lang en` only
 when the user explicitly wants it. The resolution chain is
 explicit argument → engine answer → text heuristic; the resulting label is
@@ -38,7 +35,7 @@ If neither `--out` nor `--out-root` is given, artifacts land in
   for filesystem safety (never a URL slug).
 
 If the directory already exists, a numeric suffix is appended
-(`call`, `call-2`, `call-3`, …). Pass `--out DIR` to take full control of
+(`call`, `call (2)`, `call (3)`, …). Pass `--out DIR` to take full control of
 the location.
 
 ## Examples
@@ -89,14 +86,13 @@ Before any model work, the CLI verifies, and fails fast with exit 1 if:
 - the source is a non-YouTube URL (only local files and YouTube are
   supported);
 - a local file does not exist;
+- neither `--out` nor `--out-root` is given.
 
 ## Errors
 
 Runtime failures print `transcribe: error: <reason>` to stderr and exit 1.
 Once the output directory is known, a failed run finalizes `progress.json`
-with status `error`, so a status check explains what happened. Preflight and
-source-validation failures before the tracker exists may leave no progress
-file.
+with status `error`, so a status check explains what happened.
 
 ## Reading the result
 

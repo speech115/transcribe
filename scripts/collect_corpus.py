@@ -3,17 +3,16 @@
 
 Корпус — база для исследований (ETA-калибровка, бенчмарки движка).
 Одна строка JSONL = один завершённый прогон транскрибации.
-The run module owns the manifest schema and corpus-row projection
-(Manifest.from_dict / to_corpus_row); this script does not redeclare them.
 """
 import argparse
 import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "lib"))
-from run import Manifest
+FIELDS = ["source", "duration", "speakers", "language", "engine", "generated",
+          "out_dir", "asr_rtf", "asr_model", "diar_mode", "speakers_arg",
+          "words", "turns", "engine_binary"]
+TIMING_FIELDS = ["prep_s", "asr_s", "diar_s"]
 
 
 def collect(root: Path) -> list[dict]:
@@ -23,7 +22,14 @@ def collect(root: Path) -> list[dict]:
             m = json.loads(mf.read_text())
         except Exception:
             continue
-        rows.append(Manifest.from_dict(m).to_corpus_row(mf))
+        row = {k: m.get(k) for k in FIELDS}
+        t = m.get("timings_s") or {}
+        row.update({k: t.get(k) for k in TIMING_FIELDS})
+        dur, asr_s = row.get("duration"), row.get("asr_s")
+        if dur and asr_s:
+            row["measured_rtf"] = round(dur / asr_s, 2)
+        row["manifest_path"] = str(mf)
+        rows.append(row)
     rows.sort(key=lambda r: r.get("generated") or "")
     return rows
 
@@ -43,8 +49,7 @@ def summarize(rows: list[dict]) -> str:
     ]
     langs = {}
     for r in rows:
-        language = r.get("language") or "unknown"
-        langs[language] = langs.get(language, 0) + 1
+        langs[r.get("language")] = langs.get(r.get("language"), 0) + 1
     if langs:
         lines.append("языки: " + ", ".join(f"{k}: {v}" for k, v in sorted(langs.items())))
     return "\n".join(l for l in lines if l)
