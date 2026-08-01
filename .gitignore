@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .DS_Store
 *.log
+.transcribe-watch.json
 
 # корпус прогонов: личные пути и названия видео, накапливается локально
 docs/research/corpus.jsonl

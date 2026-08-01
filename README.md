@@ -41,8 +41,14 @@ Skill lineage: this CLI is the engine behind the `transcribe` agent skill
   (`prep` → `asr` → `diar` → `merge`) are traced live in `progress.json`.
 - **Batch and watched folders** — pass several sources for sequential batch
   transcription, or use explicit `--watch DIR` polling for dropped media.
+  Watch status persists across restarts; `--retry-failed` retries failed
+  sources once.
 - **Clean turns** — `--clean-fillers` removes a conservative language-aware
   list from turns while preserving raw word timings.
+- **Subtitle exports** — `--formats srt,vtt` writes timestamped subtitles
+  from the same speaker turns.
+- **Deterministic term cleanup** — `--replacements terms.json` normalizes
+  known recognition terms without modifying raw word timings.
 - **Speaker diarization** — `--speakers auto` detects the speaker count,
   `--speakers N` forces it, `--speakers off` disables it for monologues.
   Fast streaming mode by default; an offline mode for accuracy.
@@ -137,6 +143,9 @@ per-invocation flags:
 | `--out DIR` | — | explicit output directory for this run |
 | `--out-root DIR` | `~/Downloads/transcripts` | root for default output naming |
 | `--clean-fillers` | off | remove conservative filler words from turns; raw words stay unchanged |
+| `--formats srt,vtt` | — | write optional SRT/VTT subtitle artifacts from turn timings |
+| `--replacements FILE` | — | apply a case-sensitive JSON replacement dictionary to turn text |
+| `--retry-failed` | off | retry each persisted failed watch source once after startup |
 | `--watch DIR` | — | poll a folder for stable new media; mutually exclusive with inputs and `--out` |
 | `--diar-mode streaming\|offline` | `streaming` | fast diarization, or slower and more accurate |
 | `--asr-model v3\|v2` | `v3` | Parakeet model generation |
@@ -164,10 +173,15 @@ directory:
   ready for AI agents.
 - `transcript.json` — structured turns and raw word timings. With
   `--clean-fillers`, only the turn text is cleaned.
-- `manifest.json` — engine, source, duration, RTF, speaker count, cleanup flag,
-  and run metadata; written last, so its presence means the run completed.
+- `manifest.json` — engine, source, canonical local source path, duration, RTF,
+  speaker count, cleanup flag, and run metadata; written last, so its presence
+  means the run completed.
+- `.transcribe-watch.json` — persistent watch state under the output root;
+  it is not a transcript artifact and is ignored by git.
 - `progress.json` — live run tracing, updated every ~2 s and finalized
   `done`/`error`.
+- `transcript.srt` / `transcript.vtt` — optional subtitle artifacts when
+  requested with `--formats`.
 
 For a simple "transcribe this" request, report the `transcript.md` path and
 compact metrics from `manifest.json`. Read `transcript.md` only for

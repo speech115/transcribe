@@ -20,6 +20,7 @@
              [--out DIR] [--out-root DIR] [--diar-mode streaming|offline] [--asr-model v3|v2]
 """
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -27,9 +28,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 from run import (DEFAULT_OUT_ROOT, RunError, format_duration, is_processed, run,
-                 status, status_dict, status_line, watch_candidate)  # noqa: E402
+                 load_watch_state, normalize_formats, processing_options_hash,
+                 save_watch_state, source_signature, status, status_dict,
+                 status_line, watch_candidate)  # noqa: E402
 
 WATCH_INTERVAL_S = 10.0
+
+
+def _parse_formats(value: str) -> tuple[str, ...]:
+    try:
+        return normalize_formats(value)
+    except RunError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def cmd_status(argv) -> int:
@@ -59,30 +69,73 @@ def _print_result(result) -> None:
     print(f"  {result.transcript_md}")
     print(f"  {result.transcript_json}")
     print(f"  {result.manifest}")
+    for subtitle_path in result.subtitle_paths:
+        print(f"  {subtitle_path}")
     if result.workdir is not None:
         print(f"  отладочные файлы сохранены: {result.workdir}")
 
 
 def _watch(watch_dir: Path, *, out_root: Path, speakers: str, lang: str,
            diar_mode: str, asr_model: str, keep_tmp: bool,
-           clean_fillers: bool) -> None:
+           clean_fillers: bool, formats: tuple[str, ...],
+           replacements_file: Path | None, retry_failed: bool) -> None:
     stable = {}
-    blacklist = set()
+    watch_state_path = out_root / ".transcribe-watch.json"
+    watch_state = load_watch_state(watch_state_path)
+    sources = watch_state["sources"]
+    retried_failures = set()
+    processing_options_hash(
+        speakers=speakers, lang=lang, diar_mode=diar_mode, asr_model=asr_model,
+        clean_fillers=clean_fillers, formats=formats,
+        replacements_file=replacements_file)
     while True:
         for source in sorted(watch_dir.iterdir()):
             if not watch_candidate(source, stable):
                 continue
             key = source.resolve()
-            if key in blacklist or is_processed(source, out_root):
+            signature = source_signature(source)
+            if signature is None:
                 continue
+            options_hash = processing_options_hash(
+                speakers=speakers, lang=lang, diar_mode=diar_mode,
+                asr_model=asr_model, clean_fillers=clean_fillers, formats=formats,
+                replacements_file=replacements_file)
+            key_text = str(key)
+            record = sources.get(key_text)
+            same_attempt = (record is not None
+                            and record.get("signature") == list(signature)
+                            and record.get("options_hash") == options_hash)
+            if ((record is None or same_attempt)
+                    and is_processed(source, out_root, options_hash=options_hash)):
+                if not same_attempt or record.get("status") != "done":
+                    sources[key_text] = {"signature": list(signature),
+                                         "options_hash": options_hash, "status": "done",
+                                         "attempts": record.get("attempts", 0) if same_attempt else 0}
+                    save_watch_state(watch_state_path, watch_state)
+                continue
+            if (same_attempt and record.get("status") == "failed"
+                    and (not retry_failed or key_text in retried_failures)):
+                continue
+            if same_attempt and record.get("status") == "failed":
+                retried_failures.add(key_text)
+            attempts = (record.get("attempts", 0) + 1) if same_attempt else 1
             try:
                 result = run(source, out_root=out_root, speakers=speakers, lang=lang,
                              diar_mode=diar_mode, asr_model=asr_model,
-                             keep_tmp=keep_tmp, clean_fillers=clean_fillers)
+                             keep_tmp=keep_tmp, clean_fillers=clean_fillers,
+                             formats=formats, replacements_file=replacements_file)
             except RunError as exc:
                 print(f"transcribe: error: {source}: {exc}", file=sys.stderr)
-                blacklist.add(key)
+                sources[key_text] = {"signature": list(signature),
+                                     "options_hash": options_hash, "status": "failed",
+                                     "attempts": attempts, "error": str(exc)}
+                save_watch_state(watch_state_path, watch_state)
                 continue
+            sources[key_text] = {"signature": list(signature),
+                                 "options_hash": (result.options_hash or options_hash),
+                                 "status": "done",
+                                 "attempts": attempts, "out_dir": str(result.out_dir)}
+            save_watch_state(watch_state_path, watch_state)
             _print_result(result)
         time.sleep(WATCH_INTERVAL_S)
 
@@ -107,6 +160,12 @@ def main():
     p.add_argument("--keep-tmp", action="store_true")
     p.add_argument("--clean-fillers", action="store_true",
                    help="удалять консервативный список слов-паразитов из реплик")
+    p.add_argument("--formats", type=_parse_formats, default=(), metavar="LIST",
+                   help="additional subtitle artifacts: srt,vtt")
+    p.add_argument("--replacements", type=Path, default=None, metavar="JSON",
+                   help="JSON dictionary of exact replacements in turn text")
+    p.add_argument("--retry-failed", action="store_true",
+                   help="retry persisted failed watch sources once after startup")
     args = p.parse_args()
 
     if args.watch:
@@ -121,9 +180,14 @@ def main():
         try:
             _watch(watch_dir, out_root=out_root, speakers=args.speakers, lang=args.lang,
                    diar_mode=args.diar_mode, asr_model=args.asr_model,
-                   keep_tmp=args.keep_tmp, clean_fillers=args.clean_fillers)
+                   keep_tmp=args.keep_tmp, clean_fillers=args.clean_fillers,
+                   formats=args.formats, replacements_file=args.replacements,
+                   retry_failed=args.retry_failed)
         except KeyboardInterrupt:
             return
+        except RunError as exc:
+            print(f"transcribe: error: {exc}", file=sys.stderr)
+            sys.exit(1)
 
     if not args.inputs:
         p.error("укажите хотя бы один источник")
@@ -138,7 +202,8 @@ def main():
                     out_root=Path(args.out_root) if args.out_root else DEFAULT_OUT_ROOT,
                     speakers=args.speakers, lang=args.lang,
                     diar_mode=args.diar_mode, asr_model=args.asr_model,
-                    keep_tmp=args.keep_tmp, clean_fillers=args.clean_fillers)
+                    keep_tmp=args.keep_tmp, clean_fillers=args.clean_fillers,
+                    formats=args.formats, replacements_file=args.replacements)
         except RunError as exc:
             print(f"transcribe: error: {source}: {exc}", file=sys.stderr)
             failed = True

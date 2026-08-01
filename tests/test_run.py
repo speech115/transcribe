@@ -13,8 +13,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 import engine as engine_mod
 import run as run_mod
 from engine import EngineError, Timings, Transcript
-from run import (RunError, format_duration, is_processed, run, status, status_dict,
-                 status_line, watch_candidate)
+from run import (RunError, format_duration, is_processed, load_watch_state,
+                 processing_options_hash, run, save_watch_state, status,
+                 status_dict, status_line, watch_candidate)
 
 
 class FakeEngine:
@@ -234,6 +235,63 @@ def test_is_processed_finds_done_manifest_for_source():
         assert is_processed(source, td) is True
 
 
+def test_is_processed_honors_requested_options_hash():
+    with _tmp() as td:
+        source = td / "call.wav"
+        source.write_bytes(b"audio")
+        output = td / "call"
+        output.mkdir()
+        (output / "manifest.json").write_text(json.dumps({
+            "status": "done", "options_hash": "hash-a",
+            "source_path": str(source.resolve())}))
+
+        assert is_processed(source, td, options_hash="hash-a") is True
+        assert is_processed(source, td, options_hash="hash-b") is False
+
+
+def test_is_processed_does_not_match_same_basename_from_another_directory():
+    with _tmp() as td:
+        first = td / "one" / "call.wav"
+        second = td / "two" / "call.wav"
+        first.parent.mkdir()
+        second.parent.mkdir()
+        first.write_bytes(b"first")
+        second.write_bytes(b"second")
+        output = td / "out" / "call"
+        output.mkdir(parents=True)
+        (output / "manifest.json").write_text(json.dumps({
+            "status": "done", "options_hash": "hash-a",
+            "source_path": str(first.resolve())}))
+
+        assert is_processed(first, td / "out", options_hash="hash-a") is True
+        assert is_processed(second, td / "out", options_hash="hash-a") is False
+
+
+def test_watch_state_round_trips():
+    with _tmp() as td:
+        path = td / ".transcribe-watch.json"
+        state = {"version": 1, "sources": {
+            "/tmp/call.wav": {"status": "failed", "attempts": 1}}}
+
+        save_watch_state(path, state)
+
+        assert load_watch_state(path) == state
+
+
+def test_processing_options_hash_changes_when_output_options_change():
+    base = processing_options_hash(
+        speakers="auto", lang="auto", diar_mode="streaming", asr_model="v3",
+        clean_fillers=False, formats=(), replacements={})
+    subtitle = processing_options_hash(
+        speakers="auto", lang="auto", diar_mode="streaming", asr_model="v3",
+        clean_fillers=False, formats=("srt",), replacements={})
+    cleaned = processing_options_hash(
+        speakers="auto", lang="auto", diar_mode="streaming", asr_model="v3",
+        clean_fillers=True, formats=(), replacements={})
+
+    assert len({base, subtitle, cleaned}) == 3
+
+
 def test_run_writes_all_artifacts_consistently():
     with _tmp() as td:
         src = td / "in.wav"
@@ -311,6 +369,95 @@ def test_run_clean_fillers_keeps_raw_words_and_records_flag():
             "Um,", "hello", "uh,", "world"]
         assert transcript["turns"][0]["text"] == "hello world"
         assert manifest["clean_fillers"] is True
+
+
+def test_run_writes_requested_subtitles_and_applies_replacements_to_turns_only():
+    with _tmp() as td:
+        src = td / "in.wav"
+        src.write_bytes(b"x" * 100)
+        replacements = td / "terms.json"
+        replacements.write_text(json.dumps({"привет": "здравствуйте"}, ensure_ascii=False))
+        out = td / "out"
+        with _patch_engine(FakeEngine()), _patch_prep(duration=10.0):
+            result = run(str(src), out=out, speakers="auto", formats=("srt", "vtt"),
+                         replacements_file=replacements)
+
+        transcript = json.loads((out / "transcript.json").read_text())
+        manifest = json.loads((out / "manifest.json").read_text())
+        assert result.subtitle_paths == (out / "transcript.srt", out / "transcript.vtt")
+        assert transcript["turns"][0]["text"] == "здравствуйте"
+        assert transcript["words"][0]["text"] == "привет"
+        assert result.options_hash == manifest["options_hash"]
+        assert manifest["subtitle_formats"] == ["srt", "vtt"]
+        assert manifest["replacements_file"] == str(replacements)
+        assert (out / "transcript.srt").read_text() == (
+            "1\n00:00:00,000 --> 00:00:00,500\nS1: здравствуйте\n\n"
+            "2\n00:00:00,600 --> 00:00:01,000\nS2: мир\n"
+        )
+        assert (out / "transcript.vtt").read_text() == (
+            "WEBVTT\n\n00:00:00.000 --> 00:00:00.500\nS1: здравствуйте\n\n"
+            "00:00:00.600 --> 00:00:01.000\nS2: мир\n"
+        )
+
+
+def test_run_labels_unassigned_multi_speaker_subtitle_turns_as_unknown():
+    class UnassignedSpeakerEngine:
+        def transcribe(self, wav, *, lang="auto", speakers="auto", on_stage=None):
+            return Transcript(
+                words=[{"start": 0.0, "end": 0.5, "text": "hello"}],
+                segments=[], speakers=2, language="en", text="hello",
+                engine="fake", timings=Timings(asr_s=1.0), diar_mode="streaming")
+
+    with _tmp() as td:
+        src = td / "in.wav"
+        src.write_bytes(b"x" * 100)
+        out = td / "out"
+        with _patch_engine(UnassignedSpeakerEngine()), _patch_prep(duration=10.0):
+            run(str(src), out=out, formats=("srt",))
+
+        assert "UNKNOWN: hello" in (out / "transcript.srt").read_text()
+
+
+def test_run_rejects_unknown_subtitle_format_before_creating_progress():
+    with _tmp() as td:
+        src = td / "in.wav"
+        src.write_bytes(b"x" * 100)
+        out = td / "out"
+        try:
+            run(str(src), out=out, formats=("ass",))
+            raise AssertionError("ожидался RunError")
+        except RunError as exc:
+            assert "unsupported subtitle format" in str(exc)
+        assert not (out / "progress.json").exists()
+
+
+def test_run_reports_invalid_utf8_replacement_file_as_run_error():
+    with _tmp() as td:
+        src = td / "in.wav"
+        src.write_bytes(b"x" * 100)
+        replacements = td / "terms.json"
+        replacements.write_bytes(b"{\xff")
+        out = td / "out"
+        try:
+            run(str(src), out=out, replacements_file=replacements)
+            raise AssertionError("ожидался RunError")
+        except RunError as exc:
+            assert "replacement dictionary" in str(exc)
+        assert not (out / "progress.json").exists()
+
+
+def test_run_drops_turn_when_replacement_leaves_only_whitespace():
+    with _tmp() as td:
+        src = td / "in.wav"
+        src.write_bytes(b"x" * 100)
+        replacements = td / "terms.json"
+        replacements.write_text(json.dumps({"привет": "   "}, ensure_ascii=False))
+        out = td / "out"
+        with _patch_engine(FakeEngine()), _patch_prep(duration=10.0):
+            run(str(src), out=out, replacements_file=replacements)
+
+        transcript = json.loads((out / "transcript.json").read_text())
+        assert [turn["text"] for turn in transcript["turns"]] == ["мир"]
 
 
 def test_run_engine_error_finalizes_progress_and_raises():

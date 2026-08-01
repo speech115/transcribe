@@ -42,6 +42,18 @@ def clean_fillers_text(text: str, lang: str) -> str:
 clean_fillers = clean_fillers_text
 
 
+def apply_replacements(text: str, replacements: Dict[str, str]) -> str:
+    """Apply deterministic, case-sensitive term replacements to turn text."""
+    if not text or not replacements:
+        return text
+
+    # Longer keys first prevent a short term from consuming part of a longer
+    # term (for example, "Fluid" before "FluidAudio").
+    keys = sorted(replacements, key=lambda value: (-len(value), value))
+    pattern = re.compile("|".join(re.escape(key) for key in keys))
+    return pattern.sub(lambda match: replacements[match.group(0)], text)
+
+
 def assign_speaker(
     w_start: float,
     w_end: float,

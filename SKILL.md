@@ -1,6 +1,6 @@
 ---
 name: transcribe
-description: "Transcribe local audio/video files and YouTube media into transcript.md, transcript.json, and manifest.json, with optional speaker diarization and timestamps. Use for calls, voice notes, interviews, podcasts, lectures, recordings, or requests to identify speakers. Prefer the local offline FluidAudio/Parakeet CLI for private or routine work; use MacWhisper only when explicitly requested and its doctor passes."
+description: "Transcribe local audio/video files and YouTube media into transcript.md, transcript.json, manifest.json, and optional SRT/VTT subtitles, with optional speaker diarization and timestamps. Use for calls, voice notes, interviews, podcasts, lectures, recordings, or requests to identify speakers. Prefer the local offline FluidAudio/Parakeet CLI for private or routine work; use MacWhisper only when explicitly requested and its doctor passes."
 ---
 
 # Transcribe
@@ -10,7 +10,7 @@ tags: [transcription, asr, diarization, audio, video, media, parakeet, fluidaudi
 aliases: [audio transcribe, transcribe media, audio transcription, video transcription, diarization, speaker diarization, транскрибация, транскрибировать аудио, транскрибировать видео, диаризация, распознать спикеров]
 namespace: workspace
 dependencies: []
-version: 0.4.0
+version: 0.5.0
 -->
 
 This skill directory is the canonical source of truth. Host-specific skill
@@ -39,7 +39,8 @@ shape, speaker labeling, and transcription quality.
    For several sources, pass them in one invocation with `--out-root`; use
    `--watch DIR` only when the user explicitly wants folder monitoring.
 4. Verify that `transcript.md`, `transcript.json`, and `manifest.json` exist and
-   are non-empty. For multi-speaker output, confirm that speaker labels are not
+   are non-empty. If subtitles were requested, verify each requested subtitle
+   artifact too. For multi-speaker output, confirm that speaker labels are not
    blank.
 5. Read `manifest.json` before reporting the engine, language, duration,
    processing speed, or speaker count.
@@ -105,6 +106,9 @@ Every run writes:
 - `transcript.json` — structured turns and word timings for exact time ranges.
 - `manifest.json` — engine, source, timings, RTF, speaker count, and run metadata.
 - `progress.json` — live run tracing (status/stage/pct/ETA); finalized `done` or `error`.
+- `transcript.srt` / `transcript.vtt` — optional subtitle artifacts requested
+  with `--formats`; they use turn timings and include speaker labels for
+  multi-speaker runs.
 - Language is auto-detected and written as `ru`, `en`, `mixed`, or `auto`.
 
 Default reading rule for simple transcription: do not read the transcript after generation; report its path. Read `transcript.md` only when doing follow-up agent work such as summary, cleanup, extraction, or QA. Open `transcript.json` only when exact timestamps, word-level slicing, or programmatic post-processing is needed.
@@ -147,12 +151,19 @@ database directly, or assume that an installed `.app` means its CLI is healthy.
 - `--keep-tmp` preserves raw ASR/diarization JSON for debugging.
 - `--clean-fillers` removes conservative language-aware hesitation words from
   turns while keeping raw `words` and their timings unchanged.
+- `--formats srt,vtt` writes optional subtitle artifacts from the merged turns.
+- `--replacements <json>` applies a case-sensitive replacement dictionary to
+  turn text; raw `words` and their timings remain unchanged.
+- `--retry-failed` retries each persisted failed watch source once after the
+  watch process starts; without it, failed sources stay skipped until their
+  media or processing options change.
 - Multiple positional sources run sequentially under `--out-root`; a failed
   source is reported and the remaining sources still run, with exit 1 at the
   end if any source failed. `--out` is single-source only.
 - `--watch DIR` polls for stable `.mp3`, `.wav`, `.m4a`, `.ogg`, `.opus`,
-  `.mov`, and `.mp4` files. It skips completed outputs, ignores hidden/temp
-  files, and stops cleanly on Ctrl-C.
+  `.mov`, and `.mp4` files. It skips completed outputs, persists watch state
+  under `<out-root>/.transcribe-watch.json`, ignores hidden/temp files, and
+  stops cleanly on Ctrl-C.
 
 ## Guardrails
 
