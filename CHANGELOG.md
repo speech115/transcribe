@@ -8,6 +8,15 @@ the `version` field of the skill definition in
 
 ## [Unreleased]
 
+### Added
+
+- `--clean-fillers` for conservative language-aware cleanup of turn text;
+  raw word timings remain unchanged.
+- Sequential batch transcription with multiple positional sources and
+  aggregate exit status.
+- Dependency-free `--watch DIR` polling for stable media files, with completed
+  output detection and clean Ctrl-C shutdown.
+
 ### Changed
 
 - Vendored engine binary bumped FluidAudio v0.15.3 → v0.15.5: offline

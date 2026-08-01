@@ -25,6 +25,8 @@ from merge import merge_words_to_turns
 DEFAULT_RTF = 30.0
 STALE_S = 60.0
 PROGRESS_NAME = "progress.json"
+WATCH_EXTENSIONS = frozenset({".mp3", ".wav", ".m4a", ".ogg", ".opus", ".mov", ".mp4"})
+WATCH_TEMP_SUFFIXES = frozenset({".part", ".tmp"})
 YT_RE = re.compile(r"(youtube\.com|youtu\.be)", re.I)
 BAD_PATH_CHARS_RE = re.compile(r"[\x00-\x1f/:]+")
 
@@ -34,6 +36,50 @@ def safe_folder_name(name: str, fallback: str = "transcript") -> str:
     clean = BAD_PATH_CHARS_RE.sub(" - ", name or "")
     clean = re.sub(r"\s+", " ", clean).strip(" .-_")
     return clean[:180] or fallback
+
+
+def watch_candidate(path: Path, state: dict) -> bool:
+    """Return true after a supported media file is unchanged across two polls."""
+    path = Path(path)
+    if (not path.is_file() or path.name.startswith(".")
+            or path.suffix.lower() in WATCH_TEMP_SUFFIXES
+            or path.suffix.lower() not in WATCH_EXTENSIONS):
+        return False
+    try:
+        stat = path.stat()
+    except OSError:
+        return False
+    key = str(path.resolve())
+    signature = (stat.st_size, stat.st_mtime_ns)
+    stable = state.get(key) == signature
+    state[key] = signature
+    return stable
+
+
+def is_processed(source: Path, out_root: Path) -> bool:
+    """Return true when a watch output already has a completed manifest."""
+    source = Path(source)
+    root = Path(out_root)
+    base = root / safe_folder_name(source.stem)
+    candidates = [base]
+    try:
+        candidates.extend(sorted(root.glob(f"{base.name} (*)")))
+        candidates.extend(sorted(root.glob(f"{base.name}-*")))
+    except OSError:
+        return False
+
+    for out_dir in candidates:
+        manifest_path = out_dir / "manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(manifest, dict) or manifest.get("status", "done") != "done":
+            continue
+        recorded_source = manifest.get("source")
+        if recorded_source in (None, source.name, str(source)):
+            return True
+    return False
 
 
 def unique_dir(path: Path) -> Path:
@@ -362,7 +408,8 @@ def _render_md(meta: dict, turns: list, multi: bool) -> str:
 
 def run(input, *, out: Path | None = None, out_root: Path | None = None,
         speakers: str = "auto", lang: str = "auto", diar_mode: str = "streaming",
-        asr_model: str = "v3", keep_tmp: bool = False) -> RunResult:
+        asr_model: str = "v3", keep_tmp: bool = False,
+        clean_fillers: bool = False) -> RunResult:
     """Полный прогон: preflight → prep → asr → диаризация → merge → артефакты."""
     if not FLUID.exists():
         raise RunError(f"не найден движок: {FLUID}")
@@ -414,13 +461,16 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
         multi = n_speakers > 1
 
         progress.set(stage="merge")
-        turns = merge_words_to_turns(words, result.segments)
+        turns = merge_words_to_turns(words, result.segments,
+                                     clean_fillers=clean_fillers,
+                                     lang=result.language)
 
         generated = _now_iso()
         meta = {"source": (str(input) if is_youtube else Path(input).name),
-                "duration": duration, "speakers": n_speakers,
-                "language": result.language, "engine": result.engine,
-                "generated": generated}
+                "duration": duration,
+                "speakers": n_speakers, "language": result.language,
+                "engine": result.engine, "generated": generated,
+                "clean_fillers": clean_fillers}
 
         (out_dir / "transcript.md").write_text(_render_md(meta, turns, multi))
         (out_dir / "transcript.json").write_text(json.dumps(
@@ -433,7 +483,8 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
                     "diar_mode": result.diar_mode,
                     "speakers_arg": speakers, "words": len(words), "turns": len(turns),
                     "engine_binary": str(FLUID)}
-        (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
+        (out_dir / "manifest.json").write_text(json.dumps(
+            manifest, ensure_ascii=False, indent=2))
 
         progress.finish("done", out_dir=str(out_dir), speakers=n_speakers,
                         language=result.language, duration=duration, pct=100, eta_s=0,

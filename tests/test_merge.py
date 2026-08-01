@@ -2,7 +2,7 @@
 """Тесты merge-логики: назначение спикеров словам + группировка в реплики."""
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
-from merge import assign_speaker, merge_words_to_turns
+from merge import assign_speaker, clean_fillers, merge_words_to_turns
 
 
 def w(start, end, text):
@@ -60,6 +60,20 @@ def test_same_speaker_long_paragraph_splits_on_gap():
     # один спикер, но большая пауза => два абзаца
     assert len(turns) == 2
     assert turns[0]["speaker"] == "S1" and turns[1]["speaker"] == "S1"
+
+
+def test_clean_fillers_removes_hesitations_but_keeps_meaningful_like():
+    assert clean_fillers("Um, I like this, er, really.", "en") == "I like this, really."
+    assert clean_fillers("Э-э, мм, это ну важно.", "ru") == "это важно."
+    assert clean_fillers("Um, э-э, hello.", "mixed") == "hello."
+
+
+def test_merge_clean_fillers_applies_to_turn_text_only():
+    words = [w(0.0, 0.2, "Um,"), w(0.3, 0.6, "hello"), w(0.7, 0.9, "uh")]
+    turns = merge_words_to_turns(words, [], clean_fillers=True, lang="en")
+
+    assert turns[0]["text"] == "hello"
+    assert [word["text"] for word in words] == ["Um,", "hello", "uh"]
 
 
 if __name__ == "__main__":

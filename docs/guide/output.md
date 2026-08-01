@@ -1,7 +1,7 @@
 # Output
 
-Every run writes four files into the output directory. Three are
-deliverables; `progress.json` is live tracing and is finalized at the end.
+Every run writes three deliverables and a live-tracing file into the output
+directory.
 
 ## transcript.md
 
@@ -56,6 +56,7 @@ processing speed, or speaker count.
 | `language` | resolved label: `ru`, `en`, `mixed`, `auto` |
 | `engine` | engine display name |
 | `generated` | ISO timestamp of the run |
+| `clean_fillers` | whether filler cleanup was enabled for turns |
 | `out_dir` | artifact directory |
 | `timings_s` | `prep_s`, `asr_s`, `diar_s` (may be null) |
 | `asr_rtf` | real-time factor of the ASR pass (e.g. `61.0` ≈ 61× realtime) |
@@ -64,6 +65,10 @@ processing speed, or speaker count.
 | `speakers_arg` | the `--speakers` value as given |
 | `words` / `turns` | counts |
 | `engine_binary` | path of the vendored engine binary |
+
+When `clean_fillers` is true, `transcript.json.turns` and `transcript.md` carry
+cleaned text. `transcript.json.words` remains the raw ASR word stream with its
+original timings.
 
 ## progress.json
 

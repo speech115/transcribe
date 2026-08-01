@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 import engine as engine_mod
 import run as run_mod
 from engine import EngineError, Timings, Transcript
-from run import RunError, format_duration, run, status, status_dict, status_line
+from run import (RunError, format_duration, is_processed, run, status, status_dict,
+                 status_line, watch_candidate)
 
 
 class FakeEngine:
@@ -203,6 +204,36 @@ def test_status_done_never_stale():
         assert st.kind == "done"
 
 
+def test_watch_candidate_requires_two_stable_observations():
+    with _tmp() as td:
+        source = td / "call.wav"
+        source.write_bytes(b"audio")
+        state = {}
+
+        assert watch_candidate(source, state) is False
+        assert watch_candidate(source, state) is True
+
+
+def test_watch_candidate_rejects_hidden_temporary_and_unknown_files():
+    with _tmp() as td:
+        state = {}
+        for name in (".hidden.wav", "copy.wav.part", "notes.txt"):
+            path = td / name
+            path.write_bytes(b"x")
+            assert watch_candidate(path, state) is False
+
+
+def test_is_processed_finds_done_manifest_for_source():
+    with _tmp() as td:
+        source = td / "call.wav"
+        source.write_bytes(b"audio")
+        output = td / "call"
+        output.mkdir()
+        (output / "manifest.json").write_text(json.dumps({"status": "done"}))
+
+        assert is_processed(source, td) is True
+
+
 def test_run_writes_all_artifacts_consistently():
     with _tmp() as td:
         src = td / "in.wav"
@@ -227,6 +258,7 @@ def test_run_writes_all_artifacts_consistently():
         assert manifest["speakers"] == 2
         assert manifest["language"] == "ru"
         assert manifest["engine"] == "fake"
+        assert manifest["clean_fillers"] is False
         assert manifest["words"] == 2 and manifest["turns"] == 2
         assert len(tjson["words"]) == 2 and len(tjson["turns"]) == 2
         assert tjson["speakers"] == manifest["speakers"]
@@ -250,6 +282,35 @@ def test_run_off_skips_diarization():
         assert res.speakers == 1
         assert manifest["diar_mode"] is None
         assert "**[00:00]** привет" in (out / "transcript.md").read_text()
+
+
+def test_run_clean_fillers_keeps_raw_words_and_records_flag():
+    class FillerEngine:
+        def transcribe(self, wav, *, lang="auto", speakers="auto", on_stage=None):
+            words = [
+                {"start": 0.0, "end": 0.2, "text": "Um,"},
+                {"start": 0.3, "end": 0.6, "text": "hello"},
+                {"start": 0.7, "end": 0.9, "text": "uh,"},
+                {"start": 1.0, "end": 1.3, "text": "world"},
+            ]
+            return Transcript(words=words, segments=[], speakers=1,
+                              language="en", text="Um, hello uh, world",
+                              engine="fake", timings=Timings(asr_s=1.0),
+                              diar_mode=None)
+
+    with _tmp() as td:
+        src = td / "in.wav"
+        src.write_bytes(b"x" * 100)
+        out = td / "out"
+        with _patch_engine(FillerEngine()), _patch_prep(duration=10.0):
+            run(str(src), out=out, speakers="off", clean_fillers=True)
+
+        transcript = json.loads((out / "transcript.json").read_text())
+        manifest = json.loads((out / "manifest.json").read_text())
+        assert [word["text"] for word in transcript["words"]] == [
+            "Um,", "hello", "uh,", "world"]
+        assert transcript["turns"][0]["text"] == "hello world"
+        assert manifest["clean_fillers"] is True
 
 
 def test_run_engine_error_finalizes_progress_and_raises():

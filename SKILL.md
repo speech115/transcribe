@@ -36,6 +36,8 @@ shape, speaker labeling, and transcription quality.
    contents into chat.
 3. Run `transcribe <source> --speakers auto`. Keep automatic language detection
    unless the user explicitly requests a language.
+   For several sources, pass them in one invocation with `--out-root`; use
+   `--watch DIR` only when the user explicitly wants folder monitoring.
 4. Verify that `transcript.md`, `transcript.json`, and `manifest.json` exist and
    are non-empty. For multi-speaker output, confirm that speaker labels are not
    blank.
@@ -143,6 +145,14 @@ database directly, or assume that an installed `.app` means its CLI is healthy.
 - `--diar-mode streaming` is the default and fast.
 - `--diar-mode offline` is slower; use only when diarization quality is clearly more important than speed.
 - `--keep-tmp` preserves raw ASR/diarization JSON for debugging.
+- `--clean-fillers` removes conservative language-aware hesitation words from
+  turns while keeping raw `words` and their timings unchanged.
+- Multiple positional sources run sequentially under `--out-root`; a failed
+  source is reported and the remaining sources still run, with exit 1 at the
+  end if any source failed. `--out` is single-source only.
+- `--watch DIR` polls for stable `.mp3`, `.wav`, `.m4a`, `.ogg`, `.opus`,
+  `.mov`, and `.mp4` files. It skips completed outputs, ignores hidden/temp
+  files, and stops cleanly on Ctrl-C.
 
 ## Guardrails
 
