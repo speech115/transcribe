@@ -2,7 +2,8 @@
 
 `transcribe` is a local offline transcription CLI for macOS (Apple Silicon).
 One command turns a local audio/video file or a YouTube link into a marked-up
-transcript with speaker diarization — reads, runs, and writes four artifacts,
+transcript with speaker diarization — reads, runs, and writes four standard
+artifacts,
 then exits. Nothing leaves the machine: no cloud backend, no uploads, no
 API keys. After the first run caches the models, the tool is fully offline.
 
@@ -20,7 +21,7 @@ The stages of a run, visible live in `progress.json`:
 | `prep` | YouTube fetch (if needed) + convert to 16 kHz mono WAV via `ffmpeg` |
 | `asr` | speech recognition on the Apple Neural Engine (Parakeet TDT v3) |
 | `diar` | speaker diarization (only when `--speakers` is not `off`) |
-| `merge` | word timings + speaker segments merged into turns, artifacts written; optional filler cleanup changes turns only |
+| `merge` | word timings + speaker segments merged into turns, artifacts written; optional cleanup/replacements change turns only |
 
 Stage detail lives in [engine.md](engine.md); the merge contract lives in
 [lib/run.py](../../lib/run.py) and [ADR-0002](../adr/ADR-0002-run-module.md).
@@ -37,7 +38,9 @@ hard error (exit 1) before any model work starts.
 ## Output contract
 
 Each run writes three deliverables and a live-tracing file into the output
-directory:
+directory. `transcript.srt` and `transcript.vtt` are optional subtitle
+artifacts written with `--formats`; `--replacements` can normalize turn text
+while raw word timings stay intact.
 
 | File | Job |
 | --- | --- |
@@ -45,6 +48,7 @@ directory:
 | `transcript.json` | machine-readable turns + word timings for exact time ranges |
 | `manifest.json` | run metadata — engine, source, duration, RTF, speaker count, command flags |
 | `progress.json` | live run tracing, finalized `done` or `error` |
+| `transcript.srt` / `transcript.vtt` | optional subtitles from merged turn timings |
 
 `manifest.json` is the commit marker: it is written last, so its presence
 means the run completed. Shapes and reading rules: [output.md](output.md).
@@ -54,6 +58,7 @@ means the run completed. Shapes and reading rules: [output.md](output.md).
 | Path | Contents |
 | --- | --- |
 | `<out-root>/<title>/` | artifacts; default out-root is `~/Downloads/transcripts` |
+| `<out-root>/.transcribe-watch.json` | persistent source status for `--watch` |
 | model cache | downloaded once on first run (≈1–3 GB), reused forever after |
 | temp workdir | scratch audio; deleted unless `--keep-tmp` |
 

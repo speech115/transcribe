@@ -6,6 +6,7 @@ progress.json, калибровка RTF по прошлым прогонам, а
 status() читает progress.json и отдаёт одно из: running | done | error |
 idle | degraded. Оболочка bin/transcribe не знает ни имён файлов, ни стадий.
 """
+import hashlib
 import json
 import os
 import re
@@ -20,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from engine import EngineError, FluidAudioEngine
-from merge import merge_words_to_turns
+from merge import apply_replacements, merge_words_to_turns
 
 DEFAULT_RTF = 30.0
 STALE_S = 60.0
@@ -45,19 +46,66 @@ def watch_candidate(path: Path, state: dict) -> bool:
             or path.suffix.lower() in WATCH_TEMP_SUFFIXES
             or path.suffix.lower() not in WATCH_EXTENSIONS):
         return False
-    try:
-        stat = path.stat()
-    except OSError:
+    signature = source_signature(path)
+    if signature is None:
         return False
     key = str(path.resolve())
-    signature = (stat.st_size, stat.st_mtime_ns)
     stable = state.get(key) == signature
     state[key] = signature
     return stable
 
 
-def is_processed(source: Path, out_root: Path) -> bool:
-    """Return true when a watch output already has a completed manifest."""
+def source_signature(path: Path) -> tuple[int, int] | None:
+    """Return the cheap identity used to detect a changed watch source."""
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    return stat.st_size, stat.st_mtime_ns
+
+
+def load_watch_state(path: Path) -> dict:
+    """Read persistent watch state; malformed state degrades to an empty one."""
+    try:
+        state = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        state = None
+    if (not isinstance(state, dict) or state.get("version") != 1
+            or not isinstance(state.get("sources"), dict)):
+        return {"version": 1, "sources": {}}
+    state["sources"] = {key: value for key, value in state["sources"].items()
+                         if isinstance(key, str) and isinstance(value, dict)}
+    return state
+
+
+def save_watch_state(path: Path, state: dict) -> None:
+    """Atomically persist watch state without making it a run artifact."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def processing_options_hash(*, speakers: str, lang: str, diar_mode: str,
+                            asr_model: str, clean_fillers: bool, formats=(),
+                            replacements: dict[str, str] | None = None,
+                            replacements_file: Path | None = None) -> str:
+    """Fingerprint options that change the produced artifacts."""
+    normalized_formats = normalize_formats(formats)
+    if replacements is None:
+        replacements = load_replacements(replacements_file)
+    payload = {"speakers": speakers, "lang": lang, "diar_mode": diar_mode,
+               "asr_model": asr_model, "clean_fillers": clean_fillers,
+               "formats": list(normalized_formats), "replacements": replacements}
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                          separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def is_processed(source: Path, out_root: Path, *, options_hash: str | None = None,
+                 signature: tuple[int, int] | None = None) -> bool:
+    """Return true when a watch output matches the completed run contract."""
     source = Path(source)
     root = Path(out_root)
     base = root / safe_folder_name(source.stem)
@@ -75,6 +123,14 @@ def is_processed(source: Path, out_root: Path) -> bool:
         except (OSError, ValueError, TypeError):
             continue
         if not isinstance(manifest, dict) or manifest.get("status", "done") != "done":
+            continue
+        if options_hash is not None and manifest.get("options_hash") != options_hash:
+            continue
+        if (options_hash is not None
+                and manifest.get("source_path") != str(source.resolve())):
+            continue
+        if (signature is not None
+                and manifest.get("source_signature") != list(signature)):
             continue
         recorded_source = manifest.get("source")
         if recorded_source in (None, source.name, str(source)):
@@ -111,6 +167,8 @@ class RunResult:
     asr_rtf: float | None
     language: str
     workdir: Path | None = None
+    subtitle_paths: tuple[Path, ...] = ()
+    options_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -262,8 +320,10 @@ def _fetch_youtube_audio(url: str, workdir: Path) -> Path:
     if not shutil.which("yt-dlp"):
         raise RunError("для YouTube нужен yt-dlp (brew install yt-dlp)")
     out_tmpl = str(workdir / "yt_audio.%(ext)s")
-    subprocess.run(["yt-dlp", "-f", "bestaudio", "-x", "--audio-format", "m4a",
-                    "-o", out_tmpl, url], check=True, capture_output=True, text=True)
+    _run_checked_tool(
+        ["yt-dlp", "-f", "bestaudio", "-x", "--audio-format", "m4a",
+         "-o", out_tmpl, url],
+        "yt-dlp не смог скачать аудио")
     files = list(workdir.glob("yt_audio.*"))
     if not files:
         raise RunError("yt-dlp не скачал аудио")
@@ -282,9 +342,20 @@ def _ffprobe_duration(path: Path) -> float:
 
 
 def _to_wav16k(src: Path, dst: Path):
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
-                    "-ar", "16000", "-ac", "1", str(dst)],
-                   check=True, capture_output=True, text=True)
+    _run_checked_tool(
+        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
+         "-ar", "16000", "-ac", "1", str(dst)],
+        "ffmpeg не смог подготовить аудио")
+
+
+def _run_checked_tool(command: list[str], label: str) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise RunError(f"{label}: {detail or 'команда завершилась с ошибкой'}") from exc
+    except OSError as exc:
+        raise RunError(f"{label}: {exc}") from exc
 
 
 def _load_last_rtf(out_root: Path) -> float:
@@ -406,11 +477,76 @@ def _render_md(meta: dict, turns: list, multi: bool) -> str:
     return "\n".join(fm + body).rstrip() + "\n"
 
 
+def _subtitle_timestamp(sec: float, separator: str) -> str:
+    """Render a non-negative timestamp with millisecond precision."""
+    total_ms = max(0, int(round(float(sec) * 1000)))
+    hours, remainder = divmod(total_ms, 3_600_000)
+    minutes, remainder = divmod(remainder, 60_000)
+    seconds, millis = divmod(remainder, 1_000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}{separator}{millis:03d}"
+
+
+def _subtitle_text(turn: dict, multi: bool) -> str:
+    text = turn["text"].strip()
+    if multi:
+        return f"{turn.get('speaker') or 'UNKNOWN'}: {text}"
+    return text
+
+
+def _render_subtitles(turns: list, multi: bool, fmt: str) -> str:
+    separator = "," if fmt == "srt" else "."
+    blocks = []
+    for index, turn in enumerate(turns, 1):
+        timing = (f"{_subtitle_timestamp(turn['start'], separator)} --> "
+                  f"{_subtitle_timestamp(turn['end'], separator)}")
+        text = _subtitle_text(turn, multi)
+        if fmt == "srt":
+            blocks.append(f"{index}\n{timing}\n{text}")
+        else:
+            blocks.append(f"{timing}\n{text}")
+    if fmt == "vtt":
+        return "WEBVTT\n\n" + ("\n\n".join(blocks) + "\n" if blocks else "")
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def normalize_formats(formats) -> tuple[str, ...]:
+    """Normalize and validate optional subtitle formats for the run contract."""
+    if formats is None:
+        return ()
+    if isinstance(formats, str):
+        formats = formats.split(",")
+    normalized = tuple(dict.fromkeys(
+        str(fmt).strip().lower() for fmt in formats if str(fmt).strip()))
+    invalid = [fmt for fmt in normalized if fmt not in {"srt", "vtt"}]
+    if invalid:
+        raise RunError(f"unsupported subtitle format: {', '.join(invalid)}")
+    return normalized
+
+
+def load_replacements(path: Path | None) -> dict[str, str]:
+    if path is None:
+        return {}
+    path = Path(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RunError(f"could not read replacement dictionary {path}: {exc}") from exc
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise RunError(f"replacement dictionary is not valid JSON: {path}") from exc
+    if (not isinstance(data, dict)
+            or any(not isinstance(k, str) or not isinstance(v, str)
+                   or not k for k, v in data.items())):
+        raise RunError("replacement dictionary must be a JSON object with non-empty string keys")
+    return data
+
+
 def run(input, *, out: Path | None = None, out_root: Path | None = None,
         speakers: str = "auto", lang: str = "auto", diar_mode: str = "streaming",
         asr_model: str = "v3", keep_tmp: bool = False,
-        clean_fillers: bool = False) -> RunResult:
+        clean_fillers: bool = False, formats=(), replacements_file: Path | None = None) -> RunResult:
     """Полный прогон: preflight → prep → asr → диаризация → merge → артефакты."""
+    subtitle_formats = normalize_formats(formats)
+    replacements = load_replacements(replacements_file)
     if not FLUID.exists():
         raise RunError(f"не найден движок: {FLUID}")
     for tool in ("ffmpeg", "ffprobe"):
@@ -418,6 +554,10 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
             raise RunError(f"требуется {tool}")
     if out is None and out_root is None:
         raise RunError("укажите --out или --out-root")
+    options_hash = processing_options_hash(
+        speakers=speakers, lang=lang, diar_mode=diar_mode, asr_model=asr_model,
+        clean_fillers=clean_fillers, formats=subtitle_formats,
+        replacements=replacements)
 
     is_url = "://" in str(input)
     is_youtube = is_url and YT_RE.search(str(input))
@@ -425,6 +565,9 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
         raise RunError("поддерживаются локальные файлы и YouTube-ссылки")
     if not is_url and not Path(input).exists():
         raise RunError(f"файл не найден: {input}")
+
+    source_path = None if is_youtube else Path(input).resolve()
+    source_sig = None if source_path is None else source_signature(source_path)
 
     if out is not None:
         out_dir = Path(out)
@@ -464,17 +607,35 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
         turns = merge_words_to_turns(words, result.segments,
                                      clean_fillers=clean_fillers,
                                      lang=result.language)
+        if replacements:
+            for turn in turns:
+                turn["text"] = apply_replacements(turn["text"], replacements).strip()
+            turns = [turn for turn in turns if turn["text"]]
 
         generated = _now_iso()
         meta = {"source": (str(input) if is_youtube else Path(input).name),
+                "source_path": (None if source_path is None else str(source_path)),
+                "source_signature": (None if source_sig is None else list(source_sig)),
                 "duration": duration,
                 "speakers": n_speakers, "language": result.language,
                 "engine": result.engine, "generated": generated,
-                "clean_fillers": clean_fillers}
+                "clean_fillers": clean_fillers,
+                "subtitle_formats": list(subtitle_formats),
+                "options_hash": options_hash,
+                "replacements_file": (str(Path(replacements_file))
+                                       if replacements_file is not None else None)}
 
         (out_dir / "transcript.md").write_text(_render_md(meta, turns, multi))
         (out_dir / "transcript.json").write_text(json.dumps(
             {**meta, "turns": turns, "words": words}, ensure_ascii=False, indent=2))
+        for stale_fmt in ("srt", "vtt"):
+            if stale_fmt not in subtitle_formats:
+                (out_dir / f"transcript.{stale_fmt}").unlink(missing_ok=True)
+        subtitle_paths = []
+        for fmt in subtitle_formats:
+            subtitle_path = out_dir / f"transcript.{fmt}"
+            subtitle_path.write_text(_render_subtitles(turns, multi, fmt))
+            subtitle_paths.append(subtitle_path)
 
         rtf = (round(duration / timings["asr_s"], 1)
                if duration > 0 and timings["asr_s"] > 0 else None)
@@ -496,7 +657,8 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
                          manifest=out_dir / "manifest.json",
                          speakers=n_speakers, duration_s=duration,
                          asr_rtf=rtf, language=result.language,
-                         workdir=(workdir if keep_tmp else None))
+                         workdir=(workdir if keep_tmp else None),
+                         subtitle_paths=tuple(subtitle_paths), options_hash=options_hash)
     except EngineError as exc:
         progress.finish("error", error=str(exc))
         raise RunError(str(exc)) from exc

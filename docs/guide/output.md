@@ -1,7 +1,7 @@
 # Output
 
-Every run writes three deliverables and a live-tracing file into the output
-directory.
+Every run writes the standard deliverables and a live-tracing file into the
+output directory. SRT/VTT subtitle artifacts are written only when requested.
 
 ## transcript.md
 
@@ -51,6 +51,7 @@ processing speed, or speaker count.
 | Field | Meaning |
 | --- | --- |
 | `source` | file name or YouTube URL |
+| `source_path` | canonical local source path, or `null` for YouTube |
 | `duration` | audio duration, seconds |
 | `speakers` | number of speakers (≥ 1) |
 | `language` | resolved label: `ru`, `en`, `mixed`, `auto` |
@@ -65,10 +66,34 @@ processing speed, or speaker count.
 | `speakers_arg` | the `--speakers` value as given |
 | `words` / `turns` | counts |
 | `engine_binary` | path of the vendored engine binary |
+| `options_hash` | fingerprint of options that affect generated artifacts |
+| `subtitle_formats` | requested subtitle formats, e.g. `srt`, `vtt` |
+| `replacements_file` | replacement dictionary path, or `null` |
 
 When `clean_fillers` is true, `transcript.json.turns` and `transcript.md` carry
 cleaned text. `transcript.json.words` remains the raw ASR word stream with its
 original timings.
+
+## transcript.srt / transcript.vtt
+
+Optional subtitle artifacts, requested with `--formats srt,vtt`. They use the
+merged turn boundaries with millisecond timestamps. Multi-speaker subtitles
+prefix each caption with its speaker label (`S1:`, `S2:`); a single-speaker
+transcript has no label prefix.
+
+## Replacement dictionary
+
+`--replacements terms.json` applies exact, case-sensitive replacements to turn
+text. The same transformed text appears in `transcript.md`, `transcript.json`
+turns, and optional subtitles. The raw `transcript.json` `words` array is
+never rewritten, so original recognition text and timings remain available.
+
+```json
+{
+  "флюидаудио": "FluidAudio",
+  "Ефим": "Ефимов"
+}
+```
 
 ## progress.json
 

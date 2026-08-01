@@ -10,6 +10,12 @@ the `version` field of the skill definition in
 
 ### Added
 
+- Optional `--formats srt,vtt` subtitle artifacts built from merged turn
+  timings, with speaker labels preserved for multi-speaker runs.
+- Exact, case-sensitive `--replacements FILE` dictionaries for turn text;
+  raw word timings remain unchanged.
+- Persistent `--watch` state keyed by source signature and option fingerprint;
+  failed sources stay skipped across restarts unless `--retry-failed` is used.
 - `--clean-fillers` for conservative language-aware cleanup of turn text;
   raw word timings remain unchanged.
 - Sequential batch transcription with multiple positional sources and

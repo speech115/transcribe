@@ -2,7 +2,8 @@
 """Тесты merge-логики: назначение спикеров словам + группировка в реплики."""
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
-from merge import assign_speaker, clean_fillers, merge_words_to_turns
+from merge import (apply_replacements, assign_speaker, clean_fillers,
+                   merge_words_to_turns)
 
 
 def w(start, end, text):
@@ -74,6 +75,14 @@ def test_merge_clean_fillers_applies_to_turn_text_only():
 
     assert turns[0]["text"] == "hello"
     assert [word["text"] for word in words] == ["Um,", "hello", "uh"]
+
+
+def test_apply_replacements_prefers_longer_terms_and_keeps_unmatched_text():
+    replacements = {"Fluid": "Engine", "FluidAudio": "LocalEngine", "Engine": "Backend"}
+
+    assert apply_replacements("FluidAudio runs Fluid today.", replacements) == (
+        "LocalEngine runs Engine today."
+    )
 
 
 if __name__ == "__main__":
