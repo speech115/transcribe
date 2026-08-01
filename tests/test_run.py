@@ -80,13 +80,18 @@ def _patch_engine(engine: FakeEngine):
 
 @contextmanager
 def _patch_prep(duration: float = 10.0):
-    originals = (run_mod._ffprobe_duration, run_mod._to_wav16k)
+    originals = (run_mod._ffprobe_duration, run_mod._to_wav16k, run_mod.shutil.which)
     run_mod._ffprobe_duration = lambda path: duration
     run_mod._to_wav16k = lambda src, dst: shutil.copy(src, dst)
+    real_which = originals[2]
+    run_mod.shutil.which = lambda tool: (
+        f"/usr/bin/{tool}" if tool in {"ffmpeg", "ffprobe"} else real_which(tool)
+    )
     try:
         yield
     finally:
-        run_mod._ffprobe_duration, run_mod._to_wav16k = originals
+        (run_mod._ffprobe_duration, run_mod._to_wav16k,
+         run_mod.shutil.which) = originals
 
 
 @contextmanager
