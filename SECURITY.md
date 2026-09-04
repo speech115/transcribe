@@ -64,9 +64,9 @@ Out of scope:
 
 ## Operational note
 
-`transcribe` never runs in the background and never makes network calls of
-its own. The only network activity in the whole tool is `yt-dlp` fetching
-audio when the source is a YouTube URL. Media stays on the machine; the
-artifacts it writes are world-`read`-by-your-user by default (normal file
-permissions), so keep the output directories under a private path such as
+`transcribe` never runs in the background. Audio and transcripts are never
+uploaded. Network access is used to populate FluidAudio's model cache on the
+first run and by `yt-dlp` when the source is a YouTube URL. Media stays on the
+machine; the artifacts it writes are world-`read`-by-your-user by default
+(normal file permissions), so keep the output directories under a private path such as
 `~/Downloads` rather than a shared volume.

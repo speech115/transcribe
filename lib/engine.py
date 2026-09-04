@@ -124,7 +124,10 @@ class FluidAudioEngine:
 
 def _tmp_json(kind: str) -> Path:
     import tempfile
-    return Path(tempfile.mkstemp(prefix=f"engine_{kind}_", suffix=".json")[1])
+    fd, path = tempfile.mkstemp(prefix=f"engine_{kind}_", suffix=".json")
+    import os
+    os.close(fd)
+    return Path(path)
 
 
 def _read_json(path: Path) -> dict:
@@ -193,7 +196,7 @@ class SubprocessFluidRunner:
                "--model-version", model, "--output-json", str(out_json)]
         if lang != "auto":
             cmd += ["--language", lang]
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        self._run(cmd, "asr")
 
     def process(self, wav: Path, mode: str, num: int, out_json: Path) -> None:
         import subprocess
@@ -201,4 +204,15 @@ class SubprocessFluidRunner:
         if num > 0:
             cmd += (["--num-clusters", str(num)] if mode == "streaming"
                     else ["--num-speakers", str(num)])
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        self._run(cmd, "diar")
+
+    @staticmethod
+    def _run(cmd: list[str], stage: str) -> None:
+        import subprocess
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "").strip()
+            raise EngineError(stage, detail or f"FluidAudio завершился с кодом {exc.returncode}") from exc
+        except OSError as exc:
+            raise EngineUnavailableError(stage, f"не удалось запустить FluidAudio: {exc}") from exc

@@ -184,6 +184,24 @@ def test_golden_argv_auto_lang_and_streaming_clusters():
     assert "--num-clusters" not in diar_cmd and "--num-speakers" not in diar_cmd
 
 
+def test_subprocess_failure_is_engine_error():
+    import subprocess
+    original = subprocess.run
+    try:
+        def fail(*args, **kwargs):
+            raise subprocess.CalledProcessError(7, args[0], stderr="model crashed")
+        subprocess.run = fail
+        engine = FluidAudioEngine(binary=Path("vendor/fluidaudiocli"))
+        try:
+            engine.transcribe(Path("in.wav"), speakers="off")
+            raise AssertionError("ожидался EngineError")
+        except EngineError as exc:
+            assert exc.stage == "asr"
+            assert "model crashed" in exc.reason
+    finally:
+        subprocess.run = original
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

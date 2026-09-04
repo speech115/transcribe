@@ -75,6 +75,20 @@ def test_cli_rejects_out_with_multiple_inputs():
         sys.argv = original_argv
 
 
+def test_cli_status_json_is_valid_json():
+    cli = _load_cli()
+    original_argv = sys.argv[:]
+    output = io.StringIO()
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            sys.argv = ["transcribe", "status", "--out-root", td, "--json"]
+            with redirect_stdout(output):
+                assert cli.cmd_status(sys.argv[2:]) == 0
+    finally:
+        sys.argv = original_argv
+    assert json.loads(output.getvalue()) == {"status": "idle"}
+
+
 def test_cli_passes_subtitle_formats_and_replacements_to_run():
     cli = _load_cli()
     calls = []

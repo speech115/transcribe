@@ -57,7 +57,7 @@ def cmd_status(argv) -> int:
                 out_root=Path(args.out_root) if args.out_root else DEFAULT_OUT_ROOT,
                 max_age_s=args.max_age)
     if args.json:
-        print(status_dict(st))
+        print(json.dumps(status_dict(st), ensure_ascii=False))
     else:
         print(status_line(st))
     return 0
