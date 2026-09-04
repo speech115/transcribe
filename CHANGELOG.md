@@ -2,9 +2,7 @@
 
 All notable changes to transcribe. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows
-the `version` field of the skill definition in
-[SKILL.md](SKILL.md). Rationale for each entry lives in the ADR it names
-([docs/adr/README.md](docs/adr/README.md)).
+the `version` field of the skill definition in [SKILL.md](SKILL.md).
 
 ## [Unreleased]
 
@@ -12,16 +10,15 @@ the `version` field of the skill definition in
 
 - Optional `--formats srt,vtt` subtitle artifacts built from merged turn
   timings, with speaker labels preserved for multi-speaker runs.
-- Exact, case-sensitive `--replacements FILE` dictionaries for turn text;
-  raw word timings remain unchanged.
-- Persistent `--watch` state keyed by source signature and option fingerprint;
-  failed sources stay skipped across restarts unless `--retry-failed` is used.
-- `--clean-fillers` for conservative language-aware cleanup of turn text;
-  raw word timings remain unchanged.
 - Sequential batch transcription with multiple positional sources and
   aggregate exit status.
-- Dependency-free `--watch DIR` polling for stable media files, with completed
-  output detection and clean Ctrl-C shutdown.
+
+### Breaking
+
+- Removed `--watch`, `transcribe status`, `--clean-fillers`, and
+  `--replacements`; the CLI is now a foreground transcription pipeline.
+- Removed the corpus research script and duplicated ADR/guide/agent process
+  documentation.
 
 ### Changed
 

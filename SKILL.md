@@ -36,8 +36,7 @@ shape, speaker labeling, and transcription quality.
    contents into chat.
 3. Run `transcribe <source> --speakers auto`. Keep automatic language detection
    unless the user explicitly requests a language.
-   For several sources, pass them in one invocation with `--out-root`; use
-   `--watch DIR` only when the user explicitly wants folder monitoring.
+   For several sources, pass them in one invocation with `--out-root`.
 4. Verify that `transcript.md`, `transcript.json`, and `manifest.json` exist and
    are non-empty. If subtitles were requested, verify each requested subtitle
    artifact too. For multi-speaker output, confirm that speaker labels are not
@@ -50,33 +49,6 @@ shape, speaker labeling, and transcription quality.
    for exact timestamps, word-level slicing, or programmatic processing.
 8. If the selected route fails, report the failure and the next viable route;
    do not switch to MacWhisper or a cloud backend silently.
-9. If the user asks about progress or status of a run (including "сколько
-   осталось", "как там транскрибация", "проверь прогресс"), run
-   `transcribe status` and report the printed line verbatim. Do not invent
-   percentages or ETAs from memory.
-
-## Progress tracking (по запросу)
-
-Every run writes a live-tracing file `progress.json` next to the transcript
-artifacts, updated roughly every 2 seconds, and finalized as `done` or `error`
-when the run finishes. It holds `status`, `stage` (`prep`/`asr`/`diar`/`merge`),
-`pct`, `eta_s`, `elapsed_s`, `rtf`, `pid`, `source`, and (on completion)
-`out_dir`, `speakers`, `transcript_md`.
-
-Agent-facing status command:
-
-```bash
-transcribe status                     # последний прогон в <out-root> (default ~/Downloads/transcripts)
-transcribe status --out <out-dir>     # конкретный прогон
-transcribe status --json              # машинный вывод для программной обработки
-```
-
-- Running run prints e.g. `🎙 ASR 47% · ETA 01:18 · elapsed 02:30 · <source>`.
-- Finished run prints `✓ готово · 3 спикер(ов) · 12:34 · elapsed 05:10 · <path>/transcript.md`.
-- Failed run prints `✗ ошибка: <reason>`.
-- `pct`/`eta_s` are estimates (ASR calibrated from the last run's RTF, else a
-  default); treat them as indicators, not measurements. Diarization reports
-  the stage without a percentage.
 
 ## Default Route (preferred)
 
@@ -105,7 +77,6 @@ Every run writes:
 - `transcript.md` — canonical transcript deliverable; read it first for follow-up agent work.
 - `transcript.json` — structured turns and word timings for exact time ranges.
 - `manifest.json` — engine, source, timings, RTF, speaker count, and run metadata.
-- `progress.json` — live run tracing (status/stage/pct/ETA); finalized `done` or `error`.
 - `transcript.srt` / `transcript.vtt` — optional subtitle artifacts requested
   with `--formats`; they use turn timings and include speaker labels for
   multi-speaker runs.
@@ -149,21 +120,10 @@ database directly, or assume that an installed `.app` means its CLI is healthy.
 - `--diar-mode streaming` is the default and fast.
 - `--diar-mode offline` is slower; use only when diarization quality is clearly more important than speed.
 - `--keep-tmp` preserves raw ASR/diarization JSON for debugging.
-- `--clean-fillers` removes conservative language-aware hesitation words from
-  turns while keeping raw `words` and their timings unchanged.
 - `--formats srt,vtt` writes optional subtitle artifacts from the merged turns.
-- `--replacements <json>` applies a case-sensitive replacement dictionary to
-  turn text; raw `words` and their timings remain unchanged.
-- `--retry-failed` retries each persisted failed watch source once after the
-  watch process starts; without it, failed sources stay skipped until their
-  media or processing options change.
 - Multiple positional sources run sequentially under `--out-root`; a failed
   source is reported and the remaining sources still run, with exit 1 at the
   end if any source failed. `--out` is single-source only.
-- `--watch DIR` polls for stable `.mp3`, `.wav`, `.m4a`, `.ogg`, `.opus`,
-  `.mov`, and `.mp4` files. It skips completed outputs, persists watch state
-  under `<out-root>/.transcribe-watch.json`, ignores hidden/temp files, and
-  stops cleanly on Ctrl-C.
 
 ## Guardrails
 
@@ -181,7 +141,6 @@ database directly, or assume that an installed `.app` means its CLI is healthy.
 ```bash
 command -v transcribe
 transcribe --help
-transcribe status --json
 ```
 
 Known smoke check from setup:

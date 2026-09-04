@@ -1,13 +1,5 @@
-## Agent skills
+# Agent instructions
 
-### Issue tracker
-
-Issues and PRDs for this repo live as GitHub issues, using the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Five canonical triage roles with default labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+- Run `scripts/gate.sh` before handoff.
+- Keep the FluidAudio contract in `lib/engine.py` and the artifact contract in `lib/run.py`.
+- Do not commit transcripts or local media.
