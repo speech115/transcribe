@@ -46,6 +46,8 @@ class Transcript:
     asr_s: float = 0.0
     diar_s: float | None = None
     diar_mode: str | None = None
+    diar_status: str = "skipped"
+    diar_error: str | None = None
 
 
 class FluidAudioEngine:
@@ -71,13 +73,23 @@ class FluidAudioEngine:
 
         segments = []
         diar_s = None
+        diar_status, diar_error = "skipped", None
         if speakers != "off":
             if on_stage:
                 on_stage("diar")
             t0_diar = time.time()
-            diar_data = self._run_process(wav, int(speakers) if speakers.isdigit() else -1)
+            try:
+                diar_data = self._run_process(wav, int(speakers) if speakers.isdigit() else -1)
+                segments, n_speakers = _normalize_diar(diar_data)
+                diar_status = "success"
+            except EngineError as exc:
+                if not speakers.isdigit():
+                    n_speakers = 1
+                    diar_status = "failed"
+                    diar_error = " ".join(exc.reason.split())[:500]
+                else:
+                    raise
             diar_s = time.time() - t0_diar
-            segments, n_speakers = _normalize_diar(diar_data)
         else:
             n_speakers = 0
         n_speakers = max(n_speakers, 1)
@@ -91,7 +103,8 @@ class FluidAudioEngine:
                           language=lang_out, text=asr_data.get("text") or "",
                           engine=engine,
                           asr_s=asr_s, diar_s=diar_s,
-                          diar_mode=(self.diar_mode if speakers != "off" else None))
+                          diar_mode=(self.diar_mode if speakers != "off" else None),
+                          diar_status=diar_status, diar_error=diar_error)
 
     def _run_transcribe(self, wav: Path, lang: str) -> dict:
         out_json = _tmp_json("asr")

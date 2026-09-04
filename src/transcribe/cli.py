@@ -1,10 +1,69 @@
 #!/usr/bin/env python3
 """Local offline transcription CLI."""
 import argparse
+import json
 import sys
+import shutil
+import sysconfig
+import tempfile
+import wave
 from pathlib import Path
 
 from .run import DEFAULT_OUT_ROOT, RunError, format_duration, normalize_formats, run
+
+_COMMANDS = frozenset({"doctor", "skill"})
+
+
+def _skill_text() -> str:
+    path = (Path(sysconfig.get_path("data")) / "share" / "transcribe" /
+            "skills" / "transcribe" / "SKILL.md")
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RunError(f"installed skill is unavailable at {path}; reinstall the tool") from exc
+
+
+def _writable_dir(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    try:
+        with tempfile.NamedTemporaryFile(prefix=".transcribe-doctor-", dir=path):
+            return True
+    except OSError:
+        return False
+
+
+def _probe_diarization(binary: Path) -> bool:
+    from .engine import FluidAudioEngine
+    try:
+        with tempfile.TemporaryDirectory(prefix="transcribe-doctor-") as tmp:
+            wav_path = Path(tmp) / "probe.wav"
+            with wave.open(str(wav_path), "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(16000)
+                wav.writeframes(b"\0\0" * 8000)
+            FluidAudioEngine(binary=binary)._run_process(wav_path, -1)
+        return True
+    except Exception:
+        return False
+
+
+def _doctor() -> None:
+    from .run import FLUID
+    app_models = Path.home() / "Library" / "Application Support" / "FluidAudio"
+    cli_cache = Path.home() / "Library" / "Caches" / "fluidaudiocli"
+    checks = {
+        "ffmpeg": bool(shutil.which("ffmpeg")),
+        "engine": FLUID.is_file() and bool(shutil.which(str(FLUID))),
+        "models": app_models.is_dir(),
+        "coreml-cache": _writable_dir(app_models) and _writable_dir(cli_cache),
+        "diarization": _probe_diarization(FLUID) if FLUID.is_file() else False,
+    }
+    for name, value in checks.items():
+        print(f"{name}={'ok' if value else 'missing'}")
+    if not all(checks.values()):
+        raise RunError("preflight failed")
 
 
 def _parse_formats(value: str) -> tuple[str, ...]:
@@ -19,6 +78,11 @@ def _print_result(result) -> None:
     print(f"  {result.transcript_md}", file=sys.stderr)
     print(f"  {result.transcript_json}", file=sys.stderr)
     print(f"  {result.manifest}", file=sys.stderr)
+    diarization = (json.loads(result.manifest.read_text()).get("diarization", {})
+                   if result.manifest.exists() else {})
+    if diarization.get("status") == "failed":
+        print(f"  ⚠ diarization failed; saved ASR without speaker labels: {diarization.get('error', 'unknown error')}",
+              file=sys.stderr)
     for subtitle_path in result.subtitle_paths:
         print(f"  {subtitle_path}", file=sys.stderr)
     if result.workdir is not None:
@@ -32,7 +96,7 @@ def _stage_progress(stage):
         print(f"\r{labels[stage]}", end="", file=sys.stderr, flush=True)
 
 
-def main():
+def main(argv: list[str] | None = None):
     p = argparse.ArgumentParser(prog="transcribe", description=__doc__)
     p.add_argument("inputs", nargs="*", help="локальные медиафайлы или YouTube-URL")
     p.add_argument("--speakers", default="auto",
@@ -48,8 +112,20 @@ def main():
     p.add_argument("--keep-tmp", action="store_true")
     p.add_argument("--formats", type=_parse_formats, default=(), metavar="LIST",
                    help="additional subtitle artifacts: srt,vtt")
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
+    if args.inputs and args.inputs[0] in _COMMANDS:
+        if len(args.inputs) != 1:
+            p.error(f"{args.inputs[0]} не принимает аргументы")
+        try:
+            if args.inputs[0] == "skill":
+                print(_skill_text(), end="")
+            else:
+                _doctor()
+        except RunError as exc:
+            print(f"transcribe: {exc}", file=sys.stderr)
+            return 2
+        return 0
     if not args.inputs:
         p.error("укажите хотя бы один источник")
     if len(args.inputs) > 1 and args.out:
