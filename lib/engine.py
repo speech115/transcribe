@@ -40,16 +40,6 @@ class EngineError(Exception):
 
 
 @dataclass(frozen=True)
-class Timings:
-    """Длительности проходов движка, замеренные внутри шва.
-
-    diar_s is None ⟺ диаризация не выполнялась.
-    """
-    asr_s: float = 0.0
-    diar_s: float | None = None
-
-
-@dataclass(frozen=True)
 class Transcript:
     words: list = field(default_factory=list)        # [{"start", "end", "text"}]
     segments: list = field(default_factory=list)     # [(start, end, "S<n>", quality)]
@@ -57,7 +47,8 @@ class Transcript:
     language: str = "auto"
     text: str = ""
     engine: str = ""
-    timings: Timings = field(default_factory=Timings)
+    asr_s: float = 0.0
+    diar_s: float | None = None
     diar_mode: str | None = None
 
 
@@ -105,7 +96,7 @@ class FluidAudioEngine:
         return Transcript(words=words, segments=segments, speakers=n_speakers,
                           language=lang_out, text=asr_data.get("text") or "",
                           engine=engine,
-                          timings=Timings(asr_s=asr_s, diar_s=diar_s),
+                          asr_s=asr_s, diar_s=diar_s,
                           diar_mode=(self.diar_mode if diar_run else None))
 
     def _run_transcribe(self, wav: Path, lang: str) -> dict:
@@ -132,10 +123,8 @@ class FluidAudioEngine:
 
 def _tmp_json(kind: str) -> Path:
     import tempfile
-    fd, path = tempfile.mkstemp(prefix=f"engine_{kind}_", suffix=".json")
-    import os
-    os.close(fd)
-    return Path(path)
+    with tempfile.NamedTemporaryFile(prefix=f"engine_{kind}_", suffix=".json", delete=False) as tmp:
+        return Path(tmp.name)
 
 
 def _read_json(path: Path) -> dict:

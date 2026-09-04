@@ -41,13 +41,13 @@ engine vendored as a single binary.
 
 ### Added
 
-- One-command run contract in `lib/run.py` ([ADR-0002](docs/adr/ADR-0002-run-module.md)):
-  stages (`prep`/`asr`/`diar`/`merge`), ETA math, live `progress.json`
+- One-command run contract in `lib/run.py` (ADR-0002):
+  stages (`prep`/`asr`/`diar`/`merge`), ETA math, and live progress state
   tracing (best-effort writes, atomic finalization, sticky terminal status,
   `degraded` on corrupt state), artifact naming and schemas,
   `transcribe status` with RTF-calibrated ETA, and `manifest.json` as the
   commit marker (written last).
-- Engine seam in `lib/engine.py` ([ADR-0001](docs/adr/ADR-0001-engine-seam.md)):
+- Engine seam in `lib/engine.py` (ADR-0001):
   one `Engine.transcribe()` port over the FluidAudio subprocess contract —
   `wordTimings`/`segments` JSON, `S1..Sn` relabelling, error classification
   as `EngineError(stage)`; cloud-ready by design, two-pass topology kept

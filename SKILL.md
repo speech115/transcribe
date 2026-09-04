@@ -16,49 +16,40 @@ version: 0.5.0
 This skill directory is the canonical source of truth. Host-specific skill
 directories may symlink here; edit the target, not copied or linked views.
 
-## Routing
+## Route and workflow
 
-- Local audio/video: use the offline `transcribe` CLI.
-- YouTube with usable existing subtitles: use `video-transcript-downloader`.
-- YouTube requiring fresh ASR or diarization: pass the URL to `transcribe`.
-- Explicit MacWhisper request: run `macwhisper-transcribe doctor --json` first
-  and use that route only when healthy.
-- Existing finished transcript: do not transcribe again; perform the requested
-  cleanup, summary, extraction, or analysis directly.
-
-Do not silently switch engines. A fallback can change privacy, cost, output
-shape, speaker labeling, and transcription quality.
-
-## Workflow
+Use the local offline `transcribe` CLI for local media and for YouTube when
+fresh ASR or diarization is needed. If usable YouTube subtitles are enough,
+use `video-transcript-downloader`. For an explicit MacWhisper request (or an
+approved fallback), run `macwhisper-transcribe doctor --json` first and use it
+only when healthy. Never silently switch engines; an existing finished
+transcript should be processed directly.
 
 1. Classify the source and select the route above.
 2. For local files, verify the path is readable. Never paste API keys or media
    contents into chat.
-3. Run `transcribe <source> --speakers auto`. Keep automatic language detection
-   unless the user explicitly requests a language.
-   For several sources, pass them in one invocation with `--out-root`.
-4. Verify that `transcript.md`, `transcript.json`, and `manifest.json` exist and
-   are non-empty. If subtitles were requested, verify each requested subtitle
-   artifact too. For multi-speaker output, confirm that speaker labels are not
-   blank.
+3. Run the default command shown below; for several sources, pass them in one
+   invocation with `--out-root`.
+4. Verify the standard artifacts below are non-empty. If subtitles were
+   requested, verify each requested subtitle too; multi-speaker labels must not
+   be blank.
 5. Read `manifest.json` before reporting the engine, language, duration,
    processing speed, or speaker count.
 6. For a simple transcription request, return the artifact path and compact
    metrics. Do not add a summary unless requested.
 7. Read `transcript.md` for follow-up semantic work. Use `transcript.json` only
    for exact timestamps, word-level slicing, or programmatic processing.
-8. If the selected route fails, report the failure and the next viable route;
-   do not switch to MacWhisper or a cloud backend silently.
+8. If the selected route fails, report the failure and the next viable route.
 
-## Default Route (preferred)
+## CLI defaults and output
 
-Use the local `transcribe` CLI. Let it auto-detect language:
+The default route is local `transcribe` with automatic speakers and language:
 
 ```bash
 transcribe <file-or-youtube-url> --speakers auto
 ```
 
-Only force language when the user explicitly requests it:
+Force language only when explicitly requested:
 
 ```bash
 transcribe <file-or-youtube-url> --lang ru --speakers auto --out <output-dir>
@@ -68,9 +59,9 @@ transcribe <file-or-youtube-url> --lang en --speakers auto --out <output-dir>
 The CLI must be available in `PATH`. Check with `command -v transcribe` and
 `transcribe --help` before attempting repair or installation.
 
-If `--out` is not provided, output goes under `/Users/sereja/Downloads/transcripts/<video-or-file-title>`. For local media this is the filename without extension. For YouTube this is the actual video title, minimally sanitized for filesystem safety.
-
-## Standard Output
+If `--out` is not provided, output goes under
+`~/Downloads/transcripts/<video-or-file-title>`: the local filename without
+extension or the minimally sanitized actual YouTube title.
 
 Every run writes:
 
@@ -82,7 +73,9 @@ Every run writes:
   multi-speaker runs.
 - Language is auto-detected and written as `ru`, `en`, `mixed`, or `auto`.
 
-Default reading rule for simple transcription: do not read the transcript after generation; report its path. Read `transcript.md` only when doing follow-up agent work such as summary, cleanup, extraction, or QA. Open `transcript.json` only when exact timestamps, word-level slicing, or programmatic post-processing is needed.
+Reading rule: for a simple transcription, report the `transcript.md` path
+without reading it. Read `transcript.md` for follow-up semantic work; open
+`transcript.json` only for exact timestamps, word-level slicing, or code.
 
 ## Engine (primary local route)
 
@@ -96,7 +89,7 @@ The standard engine is FluidAudio / Parakeet:
 This route provides a MacWhisper-style local workflow without depending on the
 MacWhisper app or its history database.
 
-## MacWhisper route
+## MacWhisper fallback
 
 MacWhisper is not the default engine for this skill. Some hosts may provide an
 agent wrapper named `macwhisper-transcribe` around the official MacWhisper CLI.
@@ -113,8 +106,6 @@ database directly, or assume that an installed `.app` means its CLI is healthy.
 
 ## Flags
 
-- `--speakers auto` is the default. Use it unless the user gives a known count.
-- `--lang auto` is the default. Prefer auto-detection even for Russian/English; the final language label is written to `manifest.json` and `transcript.md`.
 - `--speakers N` forces a known number of speakers.
 - `--speakers off` disables diarization for monologues or when speed matters more.
 - `--diar-mode streaming` is the default and fast.
@@ -136,20 +127,15 @@ database directly, or assume that an installed `.app` means its CLI is healthy.
 - Do not trust the old `mlx_whisper` 1971x benchmark; it was a bad timing capture. Use fresh end-to-end wall time from `manifest.json`.
 - For YouTube, this CLI downloads audio through `yt-dlp` and still produces the same diarized standard output. If the user only wants existing subtitles, the `video-transcript-downloader` skill can still be a cheaper route.
 
-## Quick Verification
+## Quick verification
 
 ```bash
 command -v transcribe
 transcribe --help
 ```
 
-Known smoke check from setup:
-
-```bash
-transcribe /tmp/call_5min.wav --speakers auto --out /tmp/tt_call
-```
-
-Expected shape: `transcript.md`, `transcript.json`, `manifest.json`, speaker labels in markdown such as `S1`/`S2` when there is more than one speaker, and no blank speaker labels in a multi-speaker file.
+Expected shape: non-empty `transcript.md`, `transcript.json`, and
+`manifest.json`; multi-speaker markdown has `S1`/`S2`-style labels.
 
 ## Reference map
 

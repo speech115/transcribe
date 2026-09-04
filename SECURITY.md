@@ -47,8 +47,8 @@ In scope — anything that lets a local process or a crafted input:
   third party without the user's knowledge;
 - write artifacts outside the requested output directory, or follow
   crafted source names/titles outside the out-root;
-- crash the run without finalizing `progress.json` (a run must always end
-  `done` or `error`, never hang silently);
+- crash the run while leaving partially written standard artifacts or hiding
+  the failure from the caller;
 - execute commands via crafted YouTube titles, file names, or media
   metadata (`yt-dlp` and `ffmpeg` arguments must stay quoted and
   controlled).

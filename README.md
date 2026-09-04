@@ -134,7 +134,7 @@ Each run writes three deliverables into the output directory:
   ready for AI agents.
 - `transcript.json` — structured turns and raw word timings.
 - `manifest.json` — engine, source, canonical local source path, duration, RTF,
-  speaker count, cleanup flag, and run metadata; written last, so its presence
+  speaker count, and run metadata; written last, so its presence
   means the run completed.
 - `transcript.srt` / `transcript.vtt` — optional subtitle artifacts when
   requested with `--formats`.
@@ -166,8 +166,7 @@ never paste audio contents or transcripts into an issue.
   running on the Apple Neural Engine via [FluidAudio](https://fluidaudio.com/).
 - Diarization: FluidAudio pyannote-style speaker diarization.
 - YouTube audio: [`yt-dlp`](https://github.com/yt-dlp/yt-dlp).
-- Skill contract: conventions from the local agent-skills stack
-  ([docs/agents/](docs/agents/)).
+- Skill contract: conventions documented in [SKILL.md](SKILL.md).
 
 ## Maintainers
 

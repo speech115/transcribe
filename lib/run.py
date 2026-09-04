@@ -115,15 +115,11 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _hhmmss(sec: float) -> str:
-    return format_duration(sec)
-
-
 def _render_md(meta: dict, turns: list, multi: bool) -> str:
     fm = [
         "---",
         f"source: {meta['source']}",
-        f"duration: {_hhmmss(meta['duration'])}",
+        f"duration: {format_duration(meta['duration'])}",
         f"speakers: {meta['speakers']}",
         f"language: {meta['language']}",
         f"engine: {meta['engine']}",
@@ -133,7 +129,7 @@ def _render_md(meta: dict, turns: list, multi: bool) -> str:
     ]
     body = []
     for t in turns:
-        ts = _hhmmss(t["start"])
+        ts = format_duration(t["start"])
         if multi and t["speaker"]:
             body.append(f"**[{ts} · {t['speaker']}]** {t['text']}")
         else:
@@ -196,9 +192,8 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
     subtitle_formats = normalize_formats(formats)
     if not FLUID.exists():
         raise RunError(f"не найден движок: {FLUID}")
-    for tool in ("ffmpeg",):
-        if not shutil.which(tool):
-            raise RunError(f"требуется {tool}")
+    if not shutil.which("ffmpeg"):
+        raise RunError("требуется ffmpeg")
     if out is None and out_root is None:
         raise RunError("укажите --out или --out-root")
 
@@ -211,12 +206,6 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
 
     source_path = None if is_youtube else Path(input).resolve()
 
-    if out is not None:
-        out_dir = Path(out)
-    elif is_youtube:
-        out_dir = None
-    else:
-        out_dir = unique_dir(Path(out_root) / safe_folder_name(Path(input).stem))
     workdir = Path(tempfile.mkdtemp(prefix="transcribe_"))
     timings = {}
     try:
@@ -224,12 +213,11 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
             on_stage("preparing")
         if is_youtube:
             src, title = _fetch_youtube_audio(str(input), workdir)
-            if out is None:
-                out_dir = unique_dir(Path(out_root) / safe_folder_name(title, "youtube"))
         else:
             src = Path(input)
-        if out_dir is None:
-            out_dir = Path(out) if out is not None else unique_dir(Path(out_root) / safe_folder_name(Path(input).stem))
+            title = Path(input).stem
+        out_dir = (Path(out) if out is not None else
+                   unique_dir(Path(out_root) / safe_folder_name(title, "youtube" if is_youtube else "transcript")))
         if out is not None and not overwrite:
             standard = (out_dir / "transcript.md", out_dir / "transcript.json", out_dir / "manifest.json")
             if any(path.exists() for path in standard):
@@ -243,9 +231,9 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
 
         engine = FluidAudioEngine(binary=FLUID, model=asr_model, diar_mode=diar_mode)
         result = engine.transcribe(wav, lang=lang, speakers=speakers, on_stage=on_stage)
-        timings["asr_s"] = round(result.timings.asr_s, 1)
-        timings["diar_s"] = (round(result.timings.diar_s, 1)
-                             if result.timings.diar_s is not None else None)
+        timings["asr_s"] = round(result.asr_s, 1)
+        timings["diar_s"] = (round(result.diar_s, 1)
+                             if result.diar_s is not None else None)
         words = result.words
         n_speakers = max(result.speakers, 1)
         multi = n_speakers > 1
@@ -294,8 +282,6 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
                          subtitle_paths=tuple(subtitle_paths))
     except EngineError as exc:
         raise RunError(str(exc)) from exc
-    except Exception as exc:
-        raise
     finally:
         if not keep_tmp:
             shutil.rmtree(workdir, ignore_errors=True)

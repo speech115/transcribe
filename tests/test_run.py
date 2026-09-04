@@ -71,7 +71,7 @@ def test_explicit_out_overwrite_and_stages(monkeypatch, tmp_path):
     monkeypatch.setattr("run._wav_duration", lambda path: 1.0)
     fake_result = SimpleNamespace(words=[{"start": 0, "end": 1, "text": "hello"}], segments=[],
                                   speakers=1, language="en", engine="fake",
-                                  timings=SimpleNamespace(asr_s=1, diar_s=None), diar_mode=None)
+                                  asr_s=1, diar_s=None, diar_mode=None)
     class FakeEngine:
         def __init__(self, **kwargs): pass
         def transcribe(self, wav, **kwargs):

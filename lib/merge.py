@@ -2,19 +2,17 @@
 
 Чистые функции, без внешних зависимостей. Покрыто tests/test_merge.py.
 """
-from typing import List, Optional, Tuple, Dict, Union
-
 # diar-сегмент = (start, end, speaker) или (start, end, speaker, quality)
-DiarSeg = Union[Tuple[float, float, str], Tuple[float, float, str, float]]
+DiarSeg = tuple[float, float, str] | tuple[float, float, str, float]
 # слово = {"start": float, "end": float, "text": str}
-Word = Dict
+Word = dict[str, object]
 
 def assign_speaker(
     w_start: float,
     w_end: float,
-    diar: List[DiarSeg],
+    diar: list[DiarSeg],
     max_nearest_gap: float = 5.0,
-) -> Optional[str]:
+) -> str | None:
     """Спикер с максимальным перекрытием со словом.
 
     ASR и diarization часто дают немного разные границы речи. Если прямого
@@ -22,7 +20,7 @@ def assign_speaker(
     """
     word_dur = max(w_end - w_start, 0.001)
     overlaps = []
-    best: Optional[str] = None
+    best: str | None = None
     best_ov = 0.0
     for seg in diar:
         s, e, spk = seg[:3]
@@ -39,7 +37,7 @@ def assign_speaker(
     if best is not None:
         return best
 
-    nearest: Optional[str] = None
+    nearest: str | None = None
     nearest_gap = max_nearest_gap
     for seg in diar:
         s, e, spk = seg[:3]
@@ -55,17 +53,17 @@ def assign_speaker(
 
 
 def merge_words_to_turns(
-    words: List[Word],
-    diar: List[DiarSeg],
+    words: list[Word],
+    diar: list[DiarSeg],
     max_gap: float = 1.5,
     max_chars: int = 600,
-) -> List[Dict]:
+) -> list[dict]:
     """Группирует подряд идущие слова одного спикера в реплики.
 
     Новая реплика начинается при смене спикера, паузе > max_gap,
     либо когда текущая реплика превышает max_chars (чтобы абзацы не разрастались).
     """
-    turns: List[Dict] = []
+    turns: list[dict] = []
     for w in words:
         spk = assign_speaker(w["start"], w["end"], diar) if diar else None
         last = turns[-1] if turns else None
