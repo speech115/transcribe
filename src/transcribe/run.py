@@ -6,12 +6,13 @@ import subprocess
 import tempfile
 import time
 import wave
+import sys
+from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable
 from pathlib import Path
 
-from engine import EngineError, FluidAudioEngine
-from merge import merge_words_to_turns
+from .engine import EngineError, FluidAudioEngine
 
 YT_RE = re.compile(r"(youtube\.com|youtu\.be)", re.I)
 BAD_PATH_CHARS_RE = re.compile(r"[\x00-\x1f/:]+")
@@ -62,12 +63,51 @@ def format_duration(sec: float) -> str:
     return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
-# ---------------------------------------------------------------------------
-# run() — полный прогон.
-# ---------------------------------------------------------------------------
-
 DEFAULT_OUT_ROOT = Path.home() / "Downloads" / "transcripts"
-FLUID = Path(__file__).resolve().parent.parent / "vendor" / "fluidaudiocli"
+_REPO_FLUID = Path(__file__).resolve().parents[2] / "vendor" / "fluidaudiocli"
+FLUID = _REPO_FLUID if _REPO_FLUID.exists() else Path(sys.prefix) / "share" / "transcribe" / "vendor" / "fluidaudiocli"
+
+
+def assign_speaker(w_start: float, w_end: float, diar: list, max_nearest_gap: float = 5.0) -> str | None:
+    word_dur = max(w_end - w_start, 0.001)
+    overlaps, best, best_ov = [], None, 0.0
+    for seg in diar:
+        s, e, spk = seg[:3]
+        quality = float(seg[3]) if len(seg) > 3 else 1.0
+        ov = min(w_end, e) - max(w_start, s)
+        if ov > best_ov:
+            best_ov, best = ov, spk
+        if ov > 0:
+            overlaps.append((ov / word_dur, quality, ov, spk))
+    if overlaps:
+        significant = [item for item in overlaps if item[0] >= 0.35]
+        if significant:
+            return max(significant, key=lambda item: (item[1], item[0], item[2]))[3]
+    if best is not None:
+        return best
+    nearest, nearest_gap = None, max_nearest_gap
+    for seg in diar:
+        s, e, spk = seg[:3]
+        gap = s - w_end if w_end < s else w_start - e if w_start > e else 0.0
+        if gap <= nearest_gap:
+            nearest_gap, nearest = gap, spk
+    return nearest
+
+
+def merge_words_to_turns(words: list, diar: list, max_gap: float = 1.5, max_chars: int = 600) -> list[dict]:
+    turns = []
+    for word in words:
+        speaker = assign_speaker(word["start"], word["end"], diar) if diar else None
+        last = turns[-1] if turns else None
+        if (last is not None and last["speaker"] == speaker
+                and word["start"] - last["end"] <= max_gap
+                and len(last["text"]) < max_chars):
+            last["text"] += ("" if last["text"].endswith(" ") else " ") + word["text"].strip()
+            last["end"] = word["end"]
+        else:
+            turns.append({"speaker": speaker, "start": word["start"], "end": word["end"],
+                          "text": word["text"].strip()})
+    return turns
 
 
 def _fetch_youtube_audio(url: str, workdir: Path) -> tuple[Path, str]:
@@ -110,11 +150,6 @@ def _run_checked_tool(command: list[str], label: str) -> subprocess.CompletedPro
         raise RunError(f"{label}: {exc}") from exc
 
 
-def _now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def _render_md(meta: dict, turns: list, multi: bool) -> str:
     fm = [
         "---",
@@ -147,20 +182,15 @@ def _subtitle_timestamp(sec: float, separator: str) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}{separator}{millis:03d}"
 
 
-def _subtitle_text(turn: dict, multi: bool) -> str:
-    text = turn["text"].strip()
-    if multi:
-        return f"{turn.get('speaker') or 'UNKNOWN'}: {text}"
-    return text
-
-
 def _render_subtitles(turns: list, multi: bool, fmt: str) -> str:
     separator = "," if fmt == "srt" else "."
     blocks = []
     for index, turn in enumerate(turns, 1):
         timing = (f"{_subtitle_timestamp(turn['start'], separator)} --> "
                   f"{_subtitle_timestamp(turn['end'], separator)}")
-        text = _subtitle_text(turn, multi)
+        text = turn["text"].strip()
+        if multi:
+            text = f"{turn.get('speaker') or 'UNKNOWN'}: {text}"
         if fmt == "srt":
             blocks.append(f"{index}\n{timing}\n{text}")
         else:
@@ -187,7 +217,7 @@ def normalize_formats(formats) -> tuple[str, ...]:
 def run(input, *, out: Path | None = None, out_root: Path | None = None,
         speakers: str = "auto", lang: str = "auto", diar_mode: str = "streaming",
         asr_model: str = "v3", keep_tmp: bool = False, formats=(),
-        overwrite: bool = False, on_stage: Optional[Callable[[str], None]] = None) -> RunResult:
+        overwrite: bool = False, on_stage: Callable[[str], None] | None = None) -> RunResult:
     """Полный прогон: preflight → prep → asr → диаризация → merge → артефакты."""
     subtitle_formats = normalize_formats(formats)
     if not FLUID.exists():
@@ -240,7 +270,7 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
 
         turns = merge_words_to_turns(words, result.segments)
 
-        generated = _now_iso()
+        generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         meta = {"source": (str(input) if is_youtube else Path(input).name),
                 "source_path": (None if source_path is None else str(source_path)),
                 "duration": duration,

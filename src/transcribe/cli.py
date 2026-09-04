@@ -1,25 +1,10 @@
 #!/usr/bin/env python3
-"""transcribe — единая команда транскрибации с диаризацией для AI-агентов.
-
-Локальный, оффлайн, на Apple Neural Engine. Движок: FluidAudio Parakeet TDT v3
-(ASR) + pyannote-диаризация. Источники: локальные медиафайлы и YouTube.
-
-Выход (стандартный, для чтения ИИ-агентами):
-  <out>/transcript.md     канонический для чтения (реплики по спикерам)
-  <out>/transcript.json   машинный (turns + words для нарезки по таймкоду)
-  <out>/manifest.json     метаданные прогона (движок, времена, RTF, команды)
-
-Использование:
-  transcribe <файл|youtube-url>... [--speakers auto|off|N] [--lang ru|en|auto]
-             [--out DIR] [--out-root DIR] [--overwrite] [--diar-mode streaming|offline] [--asr-model v3|v2]
-"""
+"""Local offline transcription CLI."""
 import argparse
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "lib"))
-from run import DEFAULT_OUT_ROOT, RunError, format_duration, normalize_formats, run  # noqa: E402
+from .run import DEFAULT_OUT_ROOT, RunError, format_duration, normalize_formats, run
 
 
 def _parse_formats(value: str) -> tuple[str, ...]:
@@ -40,18 +25,15 @@ def _print_result(result) -> None:
         print(f"  отладочные файлы сохранены: {result.workdir}", file=sys.stderr)
 
 
-def _stage_progress(enabled):
+def _stage_progress(stage):
     labels = {"preparing": "Preparing audio…", "asr": "Transcribing…",
               "diar": "Identifying speakers…", "writing": "Writing artifacts…"}
-    def emit(stage):
-        if enabled and stage in labels:
-            print(f"\r{labels[stage]}", end="", file=sys.stderr, flush=True)
-    return emit
+    if sys.stderr.isatty() and stage in labels:
+        print(f"\r{labels[stage]}", end="", file=sys.stderr, flush=True)
 
 
 def main():
-    p = argparse.ArgumentParser(prog="transcribe", description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(prog="transcribe", description=__doc__)
     p.add_argument("inputs", nargs="*", help="локальные медиафайлы или YouTube-URL")
     p.add_argument("--speakers", default="auto",
                    help="auto (детект) | off (без диаризации) | N (число спикеров)")
@@ -82,7 +64,7 @@ def main():
                     speakers=args.speakers, lang=args.lang,
                     diar_mode=args.diar_mode, asr_model=args.asr_model,
                     keep_tmp=args.keep_tmp, formats=args.formats, overwrite=args.overwrite,
-                    on_stage=_stage_progress(sys.stderr.isatty()))
+                    on_stage=_stage_progress)
         except RunError as exc:
             print(f"transcribe: error: {source}: {exc}", file=sys.stderr)
             failed = True

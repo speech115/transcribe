@@ -1,0 +1,3 @@
+include LICENSE README.md SECURITY.md CONTRIBUTING.md
+recursive-include skills *
+include vendor/fluidaudiocli

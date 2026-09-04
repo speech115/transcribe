@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install dependencies
+      - name: Install test dependencies
         run: pip install pytest
       - name: Run tests
         run: python -m pytest tests/ -q
@@ -35,7 +35,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install dependencies
-        run: pip install pytest
+      - name: Install package
+        run: pip install . pytest
+      - name: Verify installed runtime
+        run: |
+          transcribe --help
+          python -c 'import os; from transcribe.run import FLUID; assert FLUID.exists() and os.access(FLUID, os.X_OK), FLUID'
+      - name: Verify wheel architecture
+        run: |
+          python -m pip wheel --no-deps . -w /tmp/transcribe-wheel
+          wheel=$(find /tmp/transcribe-wheel -name '*.whl' -print -quit)
+          case "$wheel" in
+            *-py3-none-macosx_*_arm64.whl) ;;
+            *) echo "unexpected wheel: $wheel"; exit 1 ;;
+          esac
       - name: Run tests
         run: python -m pytest tests/ -q

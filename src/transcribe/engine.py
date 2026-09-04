@@ -6,7 +6,7 @@ subprocess, обе JSON-схемы, релейблинг S1..Sn, политик�
 """
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 import time
 
@@ -25,10 +25,6 @@ def detect_language(text: str) -> str:
     if lat / total >= .5:
         return "en"
     return "auto"
-
-Lang = str  # "ru" | "en" | "auto"
-Speakers = str  # "auto" | "off" | "N"
-
 
 class EngineError(Exception):
     """Провал прогона. stage: "asr" | "diar" | "parse"."""
@@ -61,9 +57,9 @@ class FluidAudioEngine:
         self.model = model
         self.diar_mode = diar_mode
 
-    def transcribe(self, wav: Path, *, lang: Lang = "auto",
-                   speakers: Speakers = "auto",
-                   on_stage: Optional[Callable[[str], None]] = None) -> Transcript:
+    def transcribe(self, wav: Path, *, lang: str = "auto",
+                   speakers: str = "auto",
+                   on_stage: Callable[[str], None] | None = None) -> Transcript:
         if on_stage:
             on_stage("asr")
         t0_asr = time.time()
@@ -75,14 +71,12 @@ class FluidAudioEngine:
 
         segments = []
         diar_s = None
-        diar_run = False
         if speakers != "off":
             if on_stage:
                 on_stage("diar")
             t0_diar = time.time()
-            diar_data = self._run_process(wav, _num(speakers))
+            diar_data = self._run_process(wav, int(speakers) if speakers.isdigit() else -1)
             diar_s = time.time() - t0_diar
-            diar_run = True
             segments, n_speakers = _normalize_diar(diar_data)
         else:
             n_speakers = 0
@@ -97,7 +91,7 @@ class FluidAudioEngine:
                           language=lang_out, text=asr_data.get("text") or "",
                           engine=engine,
                           asr_s=asr_s, diar_s=diar_s,
-                          diar_mode=(self.diar_mode if diar_run else None))
+                          diar_mode=(self.diar_mode if speakers != "off" else None))
 
     def _run_transcribe(self, wav: Path, lang: str) -> dict:
         out_json = _tmp_json("asr")
@@ -136,10 +130,6 @@ def _read_json(path: Path) -> dict:
     if not isinstance(data, dict):
         raise EngineError("parse", "ответ движка не JSON-объект")
     return data
-
-
-def _num(speakers: str) -> int:
-    return int(speakers) if speakers.isdigit() else -1
 
 
 def _resolve_language(lang: str, engine_lang, text: str) -> str:

@@ -10,3 +10,8 @@ docs/research/corpus.jsonl
 # глобальный ~/.gitignore игнорирует vendor/; бинарник движка нужен в репо
 !vendor/
 !vendor/fluidaudiocli
+
+# local package/build output
+*.egg-info/
+build/
+dist/
