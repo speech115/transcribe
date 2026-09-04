@@ -1,3 +1,4 @@
+import json
 import wave
 from types import SimpleNamespace
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from transcribe.run import (RunError, _fetch_youtube_audio, _wav_duration, format_duration,
                             normalize_formats, safe_folder_name, assign_speaker,
                             merge_words_to_turns, run)
+from transcribe.engine import EngineError
 
 
 def test_naming_and_merge():
@@ -84,3 +86,62 @@ def test_explicit_out_overwrite_and_stages(monkeypatch, tmp_path):
     assert result.transcript_md.read_text() != "old"
     assert stages == ["preparing", "asr", "writing"]
     assert not (out / "progress.json").exists()
+
+
+def test_auto_diarization_failure_keeps_asr_and_records_fallback(monkeypatch, tmp_path):
+    source = tmp_path / "call.m4a"
+    source.write_bytes(b"audio")
+    out = tmp_path / "out"
+    fluid = tmp_path / "engine"
+    fluid.write_text("x")
+    monkeypatch.setattr("transcribe.run.FLUID", fluid)
+    monkeypatch.setattr("transcribe.run.shutil.which", lambda tool: "/usr/bin/" + tool)
+    monkeypatch.setattr("transcribe.run._to_wav16k", lambda src, dst: dst.write_bytes(b"wav"))
+    monkeypatch.setattr("transcribe.run._wav_duration", lambda path: 1.0)
+
+    calls = {"asr": 0, "diar": 0}
+
+    class FakeEngine:
+        def __init__(self, **kwargs): pass
+        def transcribe(self, wav, **kwargs):
+            calls["asr"] += 1
+            calls["diar"] += 1
+            if kwargs.get("on_stage"):
+                kwargs["on_stage"]("asr")
+                kwargs["on_stage"]("diar")
+            return SimpleNamespace(
+                words=[{"start": 0, "end": 1, "text": "hello"}], segments=[],
+                speakers=1, language="en", engine="fake", asr_s=1.0, diar_s=0.2,
+                diar_mode="streaming", diar_status="failed", diar_error="CoreML boom",
+            )
+
+    monkeypatch.setattr("transcribe.run.FluidAudioEngine", FakeEngine)
+    result = run(source, out=out, speakers="auto")
+    manifest = json.loads(result.manifest.read_text())
+    assert calls == {"asr": 1, "diar": 1}
+    assert "hello" in result.transcript_md.read_text()
+    assert manifest["diarization"] == {
+        "requested": True, "status": "failed", "fallback": "single-speaker",
+        "error": "CoreML boom",
+    }
+
+
+def test_explicit_speaker_count_diarization_failure_is_fatal(monkeypatch, tmp_path):
+    source = tmp_path / "call.m4a"
+    source.write_bytes(b"audio")
+    out = tmp_path / "out"
+    fluid = tmp_path / "engine"
+    fluid.write_text("x")
+    monkeypatch.setattr("transcribe.run.FLUID", fluid)
+    monkeypatch.setattr("transcribe.run.shutil.which", lambda tool: "/usr/bin/" + tool)
+    monkeypatch.setattr("transcribe.run._to_wav16k", lambda src, dst: dst.write_bytes(b"wav"))
+    monkeypatch.setattr("transcribe.run._wav_duration", lambda path: 1.0)
+
+    class FakeEngine:
+        def __init__(self, **kwargs): pass
+        def transcribe(self, wav, **kwargs):
+            raise EngineError("diar", "CoreML boom")
+
+    monkeypatch.setattr("transcribe.run.FluidAudioEngine", FakeEngine)
+    with pytest.raises(RunError, match="CoreML boom"):
+        run(source, out=out, speakers="2")

@@ -55,3 +55,20 @@ def test_cli_passes_overwrite(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", ["transcribe", "call.m4a", "--out", str(tmp_path), "--overwrite"])
     cli.main()
     assert seen["overwrite"] is True
+
+
+def test_skill_command_prints_bundled_resource(capsys):
+    assert cli.main(["skill"]) == 0
+    assert "name: transcribe" in capsys.readouterr().out
+
+
+def test_doctor_command_reports_preflight(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("transcribe.run.FLUID", tmp_path / "engine")
+    monkeypatch.setattr(cli, "_probe_diarization", lambda binary: True)
+    monkeypatch.setattr(cli.Path, "home", classmethod(lambda cls: tmp_path))
+    (tmp_path / "Library/Application Support/FluidAudio").mkdir(parents=True)
+    (tmp_path / "Library/Caches/fluidaudiocli").mkdir(parents=True)
+    (tmp_path / "engine").write_text("engine")
+    assert cli.main(["doctor"]) == 0
+    assert "ffmpeg=ok" in capsys.readouterr().out

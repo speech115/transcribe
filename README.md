@@ -6,10 +6,17 @@ YouTube URL into a readable transcript with optional speaker diarization.
 ## Install
 
 ```bash
-git clone https://github.com/speech115/transcribe.git && python3 -m pip install ./transcribe
+uv tool install git+https://github.com/speech115/transcribe.git
 ```
 
 Requires `ffmpeg`; install `yt-dlp` for YouTube sources.
+
+Verify the installed executable and print the bundled agent skill with:
+
+```bash
+transcribe doctor
+transcribe skill
+```
 
 ## Quick start
 
