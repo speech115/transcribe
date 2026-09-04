@@ -2,57 +2,12 @@
 
 Чистые функции, без внешних зависимостей. Покрыто tests/test_merge.py.
 """
-import re
 from typing import List, Optional, Tuple, Dict, Union
 
 # diar-сегмент = (start, end, speaker) или (start, end, speaker, quality)
 DiarSeg = Union[Tuple[float, float, str], Tuple[float, float, str, float]]
 # слово = {"start": float, "end": float, "text": str}
 Word = Dict
-
-_EN_FILLER_RE = re.compile(r"(?i)(?<!\w)(?:um|uh|er)(?!\w)\s*[,;:]?")
-_RU_FILLER_RE = re.compile(r"(?i)(?<!\w)(?:э(?:-э)?|м-м|мм|хм|ну)(?!\w)\s*[,;:]?")
-_CONTEXTUAL_LIKE_RE = re.compile(r"(?i)(?<!\w)like(?=\s*[,;:!?])\s*[,;:!?]?")
-
-
-def clean_fillers_text(text: str, lang: str) -> str:
-    """Remove conservative hesitation words while preserving meaningful words."""
-    if not text:
-        return text
-
-    language = (lang or "auto").lower()
-    if language == "ru":
-        patterns = (_RU_FILLER_RE,)
-    elif language == "en":
-        patterns = (_EN_FILLER_RE, _CONTEXTUAL_LIKE_RE)
-    else:
-        patterns = (_EN_FILLER_RE, _RU_FILLER_RE, _CONTEXTUAL_LIKE_RE)
-
-    cleaned = text
-    for pattern in patterns:
-        cleaned = pattern.sub("", cleaned)
-    cleaned = re.sub(r"[ \t]+", " ", cleaned)
-    cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
-    cleaned = re.sub(r"^\s*[,;:]\s*", "", cleaned)
-    cleaned = re.sub(r"([.!?])\s*[,;:]\s*", r"\1 ", cleaned)
-    cleaned = re.sub(r"([,;:])\s*(?=[,;:])", "", cleaned)
-    return cleaned.strip()
-
-
-clean_fillers = clean_fillers_text
-
-
-def apply_replacements(text: str, replacements: Dict[str, str]) -> str:
-    """Apply deterministic, case-sensitive term replacements to turn text."""
-    if not text or not replacements:
-        return text
-
-    # Longer keys first prevent a short term from consuming part of a longer
-    # term (for example, "Fluid" before "FluidAudio").
-    keys = sorted(replacements, key=lambda value: (-len(value), value))
-    pattern = re.compile("|".join(re.escape(key) for key in keys))
-    return pattern.sub(lambda match: replacements[match.group(0)], text)
-
 
 def assign_speaker(
     w_start: float,
@@ -104,8 +59,6 @@ def merge_words_to_turns(
     diar: List[DiarSeg],
     max_gap: float = 1.5,
     max_chars: int = 600,
-    clean_fillers: bool = False,
-    lang: str = "auto",
 ) -> List[Dict]:
     """Группирует подряд идущие слова одного спикера в реплики.
 
@@ -130,8 +83,4 @@ def merge_words_to_turns(
             turns.append(
                 {"speaker": spk, "start": w["start"], "end": w["end"], "text": w["text"].strip()}
             )
-    if clean_fillers:
-        for turn in turns:
-            turn["text"] = clean_fillers_text(turn["text"], lang)
-        turns = [turn for turn in turns if turn["text"]]
     return turns

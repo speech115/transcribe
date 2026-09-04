@@ -10,7 +10,21 @@ from typing import Callable, Optional
 
 import time
 
-from language import detect_language
+import re
+import subprocess
+
+def detect_language(text: str) -> str:
+    cyr, lat = len(re.findall(r"[А-Яа-яЁё]", text or "")), len(re.findall(r"[A-Za-z]", text or ""))
+    total = cyr + lat
+    if total < 20:
+        return "auto"
+    if cyr / total >= .2 and lat / total >= .2:
+        return "mixed"
+    if cyr / total >= .5:
+        return "ru"
+    if lat / total >= .5:
+        return "en"
+    return "auto"
 
 Lang = str  # "ru" | "en" | "auto"
 Speakers = str  # "auto" | "off" | "N"
@@ -23,10 +37,6 @@ class EngineError(Exception):
         super().__init__(f"[{stage}] {reason}")
         self.stage = stage
         self.reason = reason
-
-
-class EngineUnavailableError(EngineError):
-    """Движок недоступен: бинарник не найден или не запускается."""
 
 
 @dataclass(frozen=True)
@@ -55,11 +65,10 @@ class FluidAudioEngine:
     """Адаптер FluidAudio: transcribe() + process() за одним вызовом."""
 
     def __init__(self, *, binary: Path, model: str = "v3",
-                 diar_mode: str = "streaming", runner: Optional[object] = None):
+                 diar_mode: str = "streaming"):
         self.binary = binary
         self.model = model
         self.diar_mode = diar_mode
-        self._runner = runner
 
     def transcribe(self, wav: Path, *, lang: Lang = "auto",
                    speakers: Speakers = "auto",
@@ -102,10 +111,9 @@ class FluidAudioEngine:
     def _run_transcribe(self, wav: Path, lang: str) -> dict:
         out_json = _tmp_json("asr")
         try:
-            if self._runner is None:
-                SubprocessFluidRunner(self.binary).transcribe(wav, lang, self.model, out_json)
-            else:
-                self._runner.transcribe(wav, lang, self.model, out_json)
+            cmd = [str(self.binary), "transcribe", str(wav), "--word-timestamps", "--model-version", self.model, "--output-json", str(out_json)]
+            if lang != "auto": cmd += ["--language", lang]
+            _run(cmd, "asr")
             return _read_json(out_json)
         finally:
             out_json.unlink(missing_ok=True)
@@ -113,10 +121,10 @@ class FluidAudioEngine:
     def _run_process(self, wav: Path, num: int) -> dict:
         out_json = _tmp_json("diar")
         try:
-            if self._runner is None:
-                SubprocessFluidRunner(self.binary).process(wav, self.diar_mode, num, out_json)
-            else:
-                self._runner.process(wav, self.diar_mode, num, out_json)
+            cmd = [str(self.binary), "process", str(wav), "--mode", self.diar_mode, "--output", str(out_json)]
+            if num > 0:
+                cmd += (["--num-clusters", str(num)] if self.diar_mode == "streaming" else ["--num-speakers", str(num)])
+            _run(cmd, "diar")
             return _read_json(out_json)
         finally:
             out_json.unlink(missing_ok=True)
@@ -184,35 +192,11 @@ def _normalize_diar(diar_data: dict) -> tuple:
     return relabeled, n
 
 
-class SubprocessFluidRunner:
-    """Реальный раннер: единственное место с subprocess."""
-
-    def __init__(self, binary: Path):
-        self.binary = binary
-
-    def transcribe(self, wav: Path, lang: str, model: str, out_json: Path) -> None:
-        import subprocess
-        cmd = [str(self.binary), "transcribe", str(wav), "--word-timestamps",
-               "--model-version", model, "--output-json", str(out_json)]
-        if lang != "auto":
-            cmd += ["--language", lang]
-        self._run(cmd, "asr")
-
-    def process(self, wav: Path, mode: str, num: int, out_json: Path) -> None:
-        import subprocess
-        cmd = [str(self.binary), "process", str(wav), "--mode", mode, "--output", str(out_json)]
-        if num > 0:
-            cmd += (["--num-clusters", str(num)] if mode == "streaming"
-                    else ["--num-speakers", str(num)])
-        self._run(cmd, "diar")
-
-    @staticmethod
-    def _run(cmd: list[str], stage: str) -> None:
-        import subprocess
-        try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as exc:
-            detail = (exc.stderr or exc.stdout or "").strip()
-            raise EngineError(stage, detail or f"FluidAudio завершился с кодом {exc.returncode}") from exc
-        except OSError as exc:
-            raise EngineUnavailableError(stage, f"не удалось запустить FluidAudio: {exc}") from exc
+def _run(cmd: list[str], stage: str) -> None:
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise EngineError(stage, detail or f"FluidAudio завершился с кодом {exc.returncode}") from exc
+    except OSError as exc:
+        raise EngineError(stage, f"не удалось запустить FluidAudio: {exc}") from exc
