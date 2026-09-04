@@ -83,7 +83,6 @@ class FluidAudioEngine:
                 segments, n_speakers = _normalize_diar(diar_data)
                 diar_status = "success"
             except EngineError as exc:
-                diar_s = time.time() - t0_diar
                 if not speakers.isdigit():
                     n_speakers = 1
                     diar_status = "failed"
