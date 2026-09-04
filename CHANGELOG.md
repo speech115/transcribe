@@ -25,6 +25,10 @@ the `version` field of the skill definition in
 
 ### Changed
 
+- Vendored engine binary bumped FluidAudio v0.15.5 → v0.15.6 from upstream
+  tag `v0.15.6` (commit `4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b`);
+  rebuilt on arm64 macOS
+  with SHA-256 `46ec32565e3757c174a00c109f57bc93e5d8018e738027653d00844903faa97c`.
 - Vendored engine binary bumped FluidAudio v0.15.3 → v0.15.5: offline
   seam-merge artifact fixes, VBx re-clustering and Sortformer v3
   diarization fixes, ModelHub download rewrite

@@ -57,13 +57,22 @@ else in the codebase knows the engine's format
 ### Rebuilding
 
 The binary is built from the [FluidAudio](https://github.com/FluidInference/FluidAudio)
-Swift package at the pinned tag (currently **v0.15.5**, built 2026-08-01
-with Xcode 26.6 / Swift 6.3):
+Swift package at the pinned tag (currently **v0.15.6**, upstream commit
+`4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b`, built 2026-09-04 with Xcode
+26.6 / Swift 6.3.3 on arm64 macOS). The vendored binary SHA-256 is
+`46ec32565e3757c174a00c109f57bc93e5d8018e738027653d00844903faa97c`.
 
 ```bash
-git clone --depth 1 --branch v0.15.5 https://github.com/FluidInference/FluidAudio.git
+git clone --depth 1 --branch v0.15.6 https://github.com/FluidInference/FluidAudio.git
+test "$(git -C FluidAudio rev-parse HEAD)" = "4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b"
 cd FluidAudio && swift build -c release
 cp .build/release/fluidaudiocli vendor/fluidaudiocli
+```
+
+Run the dependency-free binary smoke test after copying it:
+
+```bash
+scripts/smoke_fluidaudio.sh
 ```
 
 When bumping the engine, verify the seam against real speech (a full
