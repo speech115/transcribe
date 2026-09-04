@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
+from typing import Callable, Optional
 from pathlib import Path
 
 from engine import EngineError, FluidAudioEngine
@@ -203,7 +204,8 @@ def normalize_formats(formats) -> tuple[str, ...]:
 
 def run(input, *, out: Path | None = None, out_root: Path | None = None,
         speakers: str = "auto", lang: str = "auto", diar_mode: str = "streaming",
-        asr_model: str = "v3", keep_tmp: bool = False, formats=()) -> RunResult:
+        asr_model: str = "v3", keep_tmp: bool = False, formats=(),
+        overwrite: bool = False, on_stage: Optional[Callable[[str], None]] = None) -> RunResult:
     """Полный прогон: preflight → prep → asr → диаризация → merge → артефакты."""
     subtitle_formats = normalize_formats(formats)
     if not FLUID.exists():
@@ -229,11 +231,17 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
         out_dir = unique_dir(Path(out_root) / safe_folder_name(_youtube_title(str(input)), "youtube"))
     else:
         out_dir = unique_dir(Path(out_root) / safe_folder_name(Path(input).stem))
+    if out is not None and not overwrite:
+        standard = (out_dir / "transcript.md", out_dir / "transcript.json", out_dir / "manifest.json")
+        if any(path.exists() for path in standard):
+            raise RunError("output already exists; use --overwrite")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     workdir = Path(tempfile.mkdtemp(prefix="transcribe_"))
     timings = {}
     try:
+        if on_stage:
+            on_stage("preparing")
         src = _fetch_youtube_audio(str(input), workdir) if is_youtube else Path(input)
         wav = workdir / "audio_16k.wav"
         t0 = time.time()
@@ -242,7 +250,7 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
         duration = _ffprobe_duration(wav)
 
         engine = FluidAudioEngine(binary=FLUID, model=asr_model, diar_mode=diar_mode)
-        result = engine.transcribe(wav, lang=lang, speakers=speakers)
+        result = engine.transcribe(wav, lang=lang, speakers=speakers, on_stage=on_stage)
         timings["asr_s"] = round(result.timings.asr_s, 1)
         timings["diar_s"] = (round(result.timings.diar_s, 1)
                              if result.timings.diar_s is not None else None)
@@ -260,6 +268,8 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
                 "engine": result.engine, "generated": generated,
                 "subtitle_formats": list(subtitle_formats)}
 
+        if on_stage:
+            on_stage("writing")
         (out_dir / "transcript.md").write_text(_render_md(meta, turns, multi))
         (out_dir / "transcript.json").write_text(json.dumps(
             {**meta, "turns": turns, "words": words}, ensure_ascii=False, indent=2))
