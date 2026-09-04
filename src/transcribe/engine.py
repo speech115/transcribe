@@ -85,16 +85,11 @@ class FluidAudioEngine:
             except EngineError as exc:
                 diar_s = time.time() - t0_diar
                 if not speakers.isdigit():
-                    safe_error = " ".join(exc.reason.split())[:500]
-                    return Transcript(
-                        words=words, language=_resolve_language(
-                            lang, asr_data.get("language"),
-                            asr_data.get("text") or " ".join(w["text"] for w in words)),
-                        text=asr_data.get("text") or "", speakers=1,
-                        engine=f"fluidaudio-parakeet-{self.model}", asr_s=asr_s,
-                        diar_s=diar_s, diar_mode=self.diar_mode,
-                        diar_status="failed", diar_error=safe_error)
-                raise
+                    n_speakers = 1
+                    diar_status = "failed"
+                    diar_error = " ".join(exc.reason.split())[:500]
+                else:
+                    raise
             diar_s = time.time() - t0_diar
         else:
             n_speakers = 0

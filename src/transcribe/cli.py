@@ -4,9 +4,9 @@ import argparse
 import json
 import sys
 import shutil
+import sysconfig
 import tempfile
 import wave
-from importlib.resources import files
 from pathlib import Path
 
 from .run import DEFAULT_OUT_ROOT, RunError, format_duration, normalize_formats, run
@@ -15,10 +15,12 @@ _COMMANDS = frozenset({"doctor", "skill"})
 
 
 def _skill_text() -> str:
+    path = (Path(sysconfig.get_path("data")) / "share" / "transcribe" /
+            "skills" / "transcribe" / "SKILL.md")
     try:
-        return files("transcribe").joinpath("SKILL.md").read_text(encoding="utf-8")
-    except (FileNotFoundError, ModuleNotFoundError) as exc:
-        raise RunError(f"bundled skill is unavailable: {exc}") from exc
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RunError(f"installed skill is unavailable at {path}; reinstall the tool") from exc
 
 
 def _writable_dir(path: Path) -> bool:

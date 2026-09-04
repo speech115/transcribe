@@ -301,13 +301,11 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
                     "speakers_arg": speakers, "words": len(words), "turns": len(turns),
                     "engine_binary": str(FLUID)}
         timings["total_s"] = round(time.time() - total_t0, 1)
-        diar_status = getattr(result, "diar_status", "skipped")
-        diar_error = getattr(result, "diar_error", None)
         manifest["diarization"] = {
             "requested": speakers != "off",
-            "status": diar_status,
-            "fallback": "single-speaker" if diar_status == "failed" else None,
-            "error": diar_error,
+            "status": result.diar_status,
+            "fallback": "single-speaker" if result.diar_status == "failed" else None,
+            "error": result.diar_error,
         }
         (out_dir / "manifest.json").write_text(json.dumps(
             manifest, ensure_ascii=False, indent=2))

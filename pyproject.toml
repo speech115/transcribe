@@ -18,9 +18,6 @@ transcribe = "transcribe.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.package-data]
-transcribe = ["SKILL.md"]
-
 [tool.setuptools.data-files]
 "share/transcribe/skills/transcribe" = ["skills/transcribe/SKILL.md"]
 "share/transcribe/skills/transcribe/agents" = ["skills/transcribe/agents/openai.yaml"]

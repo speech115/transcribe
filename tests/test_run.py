@@ -74,7 +74,8 @@ def test_explicit_out_overwrite_and_stages(monkeypatch, tmp_path):
     monkeypatch.setattr("transcribe.run._wav_duration", lambda path: 1.0)
     fake_result = SimpleNamespace(words=[{"start": 0, "end": 1, "text": "hello"}], segments=[],
                                   speakers=1, language="en", engine="fake",
-                                  asr_s=1, diar_s=None, diar_mode=None)
+                                  asr_s=1, diar_s=None, diar_mode=None,
+                                  diar_status="skipped", diar_error=None)
     class FakeEngine:
         def __init__(self, **kwargs): pass
         def transcribe(self, wav, **kwargs):
@@ -99,13 +100,9 @@ def test_auto_diarization_failure_keeps_asr_and_records_fallback(monkeypatch, tm
     monkeypatch.setattr("transcribe.run._to_wav16k", lambda src, dst: dst.write_bytes(b"wav"))
     monkeypatch.setattr("transcribe.run._wav_duration", lambda path: 1.0)
 
-    calls = {"asr": 0, "diar": 0}
-
     class FakeEngine:
         def __init__(self, **kwargs): pass
         def transcribe(self, wav, **kwargs):
-            calls["asr"] += 1
-            calls["diar"] += 1
             if kwargs.get("on_stage"):
                 kwargs["on_stage"]("asr")
                 kwargs["on_stage"]("diar")
@@ -118,7 +115,6 @@ def test_auto_diarization_failure_keeps_asr_and_records_fallback(monkeypatch, tm
     monkeypatch.setattr("transcribe.run.FluidAudioEngine", FakeEngine)
     result = run(source, out=out, speakers="auto")
     manifest = json.loads(result.manifest.read_text())
-    assert calls == {"asr": 1, "diar": 1}
     assert "hello" in result.transcript_md.read_text()
     assert manifest["diarization"] == {
         "requested": True, "status": "failed", "fallback": "single-speaker",

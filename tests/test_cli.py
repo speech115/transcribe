@@ -57,7 +57,11 @@ def test_cli_passes_overwrite(monkeypatch, tmp_path):
     assert seen["overwrite"] is True
 
 
-def test_skill_command_prints_bundled_resource(capsys):
+def test_skill_command_prints_bundled_resource(monkeypatch, capsys, tmp_path):
+    skill = tmp_path / "share/transcribe/skills/transcribe/SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("name: transcribe\n")
+    monkeypatch.setattr(cli.sysconfig, "get_path", lambda name: str(tmp_path))
     assert cli.main(["skill"]) == 0
     assert "name: transcribe" in capsys.readouterr().out
 
