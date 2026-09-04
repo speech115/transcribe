@@ -58,7 +58,7 @@ Skill lineage: this CLI is the engine behind the `transcribe` agent skill
 
 ## Install
 
-Requires macOS on Apple Silicon, `ffmpeg`/`ffprobe` on PATH, and (for
+Requires macOS on Apple Silicon, `ffmpeg` on PATH, and (for
 YouTube) `yt-dlp`:
 
 ```bash
