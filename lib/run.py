@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import wave
 from dataclasses import dataclass
 from typing import Callable, Optional
 from pathlib import Path
@@ -69,40 +70,25 @@ DEFAULT_OUT_ROOT = Path.home() / "Downloads" / "transcripts"
 FLUID = Path(__file__).resolve().parent.parent / "vendor" / "fluidaudiocli"
 
 
-def _youtube_title(url: str) -> str:
-    if not shutil.which("yt-dlp"):
-        raise RunError("для YouTube нужен yt-dlp (brew install yt-dlp)")
-    try:
-        title = subprocess.run(
-            ["yt-dlp", "--skip-download", "--print", "%(title)s", url],
-            check=True, capture_output=True, text=True).stdout.strip()
-    except subprocess.CalledProcessError as exc:
-        msg = (exc.stderr or exc.stdout or "").strip()
-        raise RunError(f"не удалось получить название YouTube-видео: {msg or url}") from exc
-    return title
-
-
-def _fetch_youtube_audio(url: str, workdir: Path) -> Path:
+def _fetch_youtube_audio(url: str, workdir: Path) -> tuple[Path, str]:
     if not shutil.which("yt-dlp"):
         raise RunError("для YouTube нужен yt-dlp (brew install yt-dlp)")
     out_tmpl = str(workdir / "yt_audio.%(ext)s")
-    _run_checked_tool(
-        ["yt-dlp", "-f", "bestaudio", "-x", "--audio-format", "m4a",
-         "-o", out_tmpl, url],
+    result = _run_checked_tool(
+        ["yt-dlp", "--no-simulate", "--print", "after_move:%(title)s",
+         "-f", "bestaudio", "-o", out_tmpl, url],
         "yt-dlp не смог скачать аудио")
     files = list(workdir.glob("yt_audio.*"))
     if not files:
         raise RunError("yt-dlp не скачал аудио")
-    return files[0]
+    title = next((line.strip() for line in reversed(result.stdout.splitlines()) if line.strip()), "youtube")
+    return files[0], title
 
 
-def _ffprobe_duration(path: Path) -> float:
+def _wav_duration(path: Path) -> float:
     try:
-        out = subprocess.run(
-            ["ffprobe", "-loglevel", "error", "-show_entries",
-             "format=duration", "-of", "csv=p=0", str(path)],
-            check=True, capture_output=True, text=True).stdout.strip()
-        return float(out)
+        with wave.open(str(path), "rb") as wav:
+            return wav.getnframes() / wav.getframerate()
     except Exception:
         return 0.0
 
@@ -210,7 +196,7 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
     subtitle_formats = normalize_formats(formats)
     if not FLUID.exists():
         raise RunError(f"не найден движок: {FLUID}")
-    for tool in ("ffmpeg", "ffprobe"):
+    for tool in ("ffmpeg",):
         if not shutil.which(tool):
             raise RunError(f"требуется {tool}")
     if out is None and out_root is None:
@@ -228,26 +214,32 @@ def run(input, *, out: Path | None = None, out_root: Path | None = None,
     if out is not None:
         out_dir = Path(out)
     elif is_youtube:
-        out_dir = unique_dir(Path(out_root) / safe_folder_name(_youtube_title(str(input)), "youtube"))
+        out_dir = None
     else:
         out_dir = unique_dir(Path(out_root) / safe_folder_name(Path(input).stem))
-    if out is not None and not overwrite:
-        standard = (out_dir / "transcript.md", out_dir / "transcript.json", out_dir / "manifest.json")
-        if any(path.exists() for path in standard):
-            raise RunError("output already exists; use --overwrite")
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     workdir = Path(tempfile.mkdtemp(prefix="transcribe_"))
     timings = {}
     try:
         if on_stage:
             on_stage("preparing")
-        src = _fetch_youtube_audio(str(input), workdir) if is_youtube else Path(input)
+        if is_youtube:
+            src, title = _fetch_youtube_audio(str(input), workdir)
+            if out is None:
+                out_dir = unique_dir(Path(out_root) / safe_folder_name(title, "youtube"))
+        else:
+            src = Path(input)
+        if out_dir is None:
+            out_dir = Path(out) if out is not None else unique_dir(Path(out_root) / safe_folder_name(Path(input).stem))
+        if out is not None and not overwrite:
+            standard = (out_dir / "transcript.md", out_dir / "transcript.json", out_dir / "manifest.json")
+            if any(path.exists() for path in standard):
+                raise RunError("output already exists; use --overwrite")
+        out_dir.mkdir(parents=True, exist_ok=True)
         wav = workdir / "audio_16k.wav"
         t0 = time.time()
         _to_wav16k(src, wav)
         timings["prep_s"] = round(time.time() - t0, 1)
-        duration = _ffprobe_duration(wav)
+        duration = _wav_duration(wav)
 
         engine = FluidAudioEngine(binary=FLUID, model=asr_model, diar_mode=diar_mode)
         result = engine.transcribe(wav, lang=lang, speakers=speakers, on_stage=on_stage)
