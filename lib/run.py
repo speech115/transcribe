@@ -299,7 +299,7 @@ def status_dict(st: Status) -> dict:
 # _ffprobe_duration, _to_wav16k, _fetch_youtube_audio, _youtube_title.
 # ---------------------------------------------------------------------------
 
-DEFAULT_OUT_ROOT = Path("/Users/sereja/Downloads/transcripts")
+DEFAULT_OUT_ROOT = Path.home() / "Downloads" / "transcripts"
 FLUID = Path(__file__).resolve().parent.parent / "vendor" / "fluidaudiocli"
 
 
@@ -389,10 +389,13 @@ class _Tracker:
         }
         self._stop = threading.Event()
         self._t0 = time.time()
+        self._stage_t0 = self._t0
         self._lock = threading.RLock()
 
     def set(self, **kw):
         with self._lock:
+            if "stage" in kw and kw["stage"] != self.state.get("stage"):
+                self._stage_t0 = time.time()
             self.state.update(kw)
             self.state["updated_at"] = _now_iso()
 
@@ -419,7 +422,7 @@ class _Tracker:
 
     def _estimate(self):
         stage = self.state.get("stage")
-        elapsed = self.state.get("elapsed_s") or 0
+        elapsed = max(0.0, time.time() - self._stage_t0)
         duration = self.state.get("duration") or 0
         if stage == "prep" and duration > 0:
             total = duration / 20.0
