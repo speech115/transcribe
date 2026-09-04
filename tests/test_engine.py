@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from lib.engine import EngineError, FluidAudioEngine
+from transcribe.engine import EngineError, FluidAudioEngine
 
 
 def test_engine_reads_asr_and_diar(monkeypatch, tmp_path):

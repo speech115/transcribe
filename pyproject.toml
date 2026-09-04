@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transcribe"
+version = "0.5.0"
+description = "Local offline transcription with optional speaker diarization"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{name = "speech115"}]
+dependencies = []
+
+[project.scripts]
+transcribe = "transcribe.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.data-files]
+"share/transcribe/skills/transcribe" = ["skills/transcribe/SKILL.md"]
+"share/transcribe/skills/transcribe/agents" = ["skills/transcribe/agents/openai.yaml"]
+"share/transcribe/skills/transcribe/assets" = ["skills/transcribe/assets/transcribe-small.svg", "skills/transcribe/assets/transcribe.png"]
+"share/transcribe/vendor" = ["vendor/fluidaudiocli"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
