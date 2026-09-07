@@ -33,10 +33,10 @@ Language and speaker count are automatic by default. Use `--lang`,
 
 SRT/VTT cues use up to 80 text characters and 6 seconds; a single word keeps
 its original timing. Existing transcript artifacts require `--overwrite`.
-Artifacts are prepared in a sibling directory before publication, with
+Artifacts are prepared in a temporary subdirectory of the output before publication, with
 rollback on failure. The output directory and unrelated files are left in
 place. A forced process kill during publication can leave a partial result;
-previous artifacts remain in the sibling `.NAME-*/previous` directory.
+previous artifacts remain in the output's `.transcribe-*/previous` directory.
 
 ## Privacy
 

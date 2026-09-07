@@ -239,8 +239,8 @@ def _check_output(out_dir: Path, overwrite: bool) -> None:
 def _publish_artifacts(out_dir: Path, artifacts: dict[str, str], overwrite: bool) -> None:
     """Prepare complete artifacts, restoring previous files on publication failure."""
     _check_output(out_dir, overwrite)
-    out_dir.parent.mkdir(parents=True, exist_ok=True)
-    transaction = Path(tempfile.mkdtemp(prefix=f".{out_dir.name}-", dir=out_dir.parent))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    transaction = Path(tempfile.mkdtemp(prefix=".transcribe-", dir=out_dir))
     staged, previous = transaction / "new", transaction / "previous"
     cleanup = True
     try:
@@ -249,7 +249,6 @@ def _publish_artifacts(out_dir: Path, artifacts: dict[str, str], overwrite: bool
         for name, content in artifacts.items():
             (staged / name).write_text(content, encoding="utf-8")
         _check_output(out_dir, overwrite)
-        out_dir.mkdir(exist_ok=True)
         # ponytail: files publish individually; a hard kill leaves recoverable backups.
         try:
             for name in ARTIFACT_NAMES:

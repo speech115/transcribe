@@ -182,7 +182,7 @@ def test_publication_preserves_unrelated_files_and_rolls_back(monkeypatch, tmp_p
         assert not (out / "transcript.srt").exists()
     assert (out / "notes/transcript.md").read_text() == "unrelated notes"
     assert (out / "link").is_symlink() and source.read_text() == "original"
-    assert not list(tmp_path.glob(".out-*"))
+    assert not list(out.glob(".transcribe-*"))
 
 
 def test_failed_rollback_keeps_recoverable_backup(monkeypatch, tmp_path):
@@ -197,7 +197,7 @@ def test_failed_rollback_keeps_recoverable_backup(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "replace", fail)
     with pytest.raises(RunError, match="предыдущие файлы сохранены"):
         _publish_artifacts(out, {"transcript.md": "new"}, overwrite=True)
-    assert next(tmp_path.glob(".out-*/previous/transcript.md")).read_text() == "old"
+    assert next(out.glob(".transcribe-*/previous/transcript.md")).read_text() == "old"
 
 
 def test_publication_preserves_cwd_and_concurrent_unrelated_edits(monkeypatch, tmp_path):
@@ -256,7 +256,8 @@ def test_run_write_error_does_not_abort_cli_batch(monkeypatch, tmp_path, capsys)
     with pytest.raises(SystemExit) as error:
         main([str(source), str(source), "--speakers", "off", "--out-root", str(tmp_path / "results")])
     assert error.value.code == 1
-    assert "hello" in (tmp_path / "results/audio/transcript.md").read_text()
+    completed = list((tmp_path / "results").rglob("transcript.md"))
+    assert len(completed) == 1 and "hello" in completed[0].read_text()
     assert "disk full" in capsys.readouterr().err
 
 
@@ -280,6 +281,19 @@ def test_overwrite_cannot_remove_source(monkeypatch, tmp_path):
     with pytest.raises(RunError, match="overwrite the source"):
         run(source, out=tmp_path, overwrite=True)
     assert source.read_bytes() == b"synthetic media"
+
+
+def test_writable_output_does_not_require_writable_parent(tmp_path):
+    parent = tmp_path / "read-only-parent"
+    out = parent / "output"
+    out.mkdir(parents=True)
+    parent.chmod(0o555)
+    try:
+        _publish_artifacts(out, {"transcript.md": "new"}, overwrite=False)
+        assert (out / "transcript.md").read_text() == "new"
+        assert not list(out.glob(".transcribe-*"))
+    finally:
+        parent.chmod(0o755)
 
 
 def test_speaker_window_matches_full_scan(monkeypatch):
