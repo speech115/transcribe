@@ -237,37 +237,41 @@ def _check_output(out_dir: Path, overwrite: bool) -> None:
 
 
 def _publish_artifacts(out_dir: Path, artifacts: dict[str, str], overwrite: bool) -> None:
-    """Prepare a complete directory; retain the old output if publication fails."""
+    """Prepare complete artifacts, restoring previous files on publication failure."""
     _check_output(out_dir, overwrite)
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     transaction = Path(tempfile.mkdtemp(prefix=f".{out_dir.name}-", dir=out_dir.parent))
     staged, previous = transaction / "new", transaction / "previous"
-    published = False
+    cleanup = True
     try:
-        if out_dir.exists():
-            shutil.copytree(out_dir, staged, symlinks=True,
-                            ignore=lambda directory, names: set(names) & set(ARTIFACT_NAMES)
-                            if Path(directory) == out_dir else set())
-        else:
-            staged.mkdir()
+        staged.mkdir()
+        previous.mkdir()
         for name, content in artifacts.items():
             (staged / name).write_text(content, encoding="utf-8")
         _check_output(out_dir, overwrite)
-        # ponytail: two renames; use native directory exchange if crash-atomic lookup is needed.
-        if out_dir.exists():
-            out_dir.replace(previous)
+        out_dir.mkdir(exist_ok=True)
+        # ponytail: files publish individually; a hard kill leaves recoverable backups.
         try:
-            staged.replace(out_dir)
+            for name in ARTIFACT_NAMES:
+                path = out_dir / name
+                if path.exists() or path.is_symlink():
+                    path.replace(previous / name)
+            for name in artifacts:
+                (staged / name).replace(out_dir / name)
         except BaseException:
-            if previous.exists():
-                try:
-                    previous.replace(out_dir)
-                except OSError as exc:
-                    raise RunError(f"не удалось восстановить output; предыдущий результат сохранён: {previous}") from exc
+            cleanup = False
+            try:
+                for name in artifacts:
+                    if not (staged / name).exists():
+                        (out_dir / name).unlink(missing_ok=True)
+                for saved in previous.iterdir():
+                    saved.replace(out_dir / saved.name)
+            except OSError as exc:
+                raise RunError(f"не удалось восстановить output; предыдущие файлы сохранены: {previous}") from exc
+            cleanup = True
             raise
-        published = True
     finally:
-        if published or not previous.exists():
+        if cleanup:
             shutil.rmtree(transaction, ignore_errors=True)
 
 

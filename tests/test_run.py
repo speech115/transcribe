@@ -1,4 +1,5 @@
 import json
+import os
 import wave
 from pathlib import Path
 from random import Random
@@ -165,7 +166,7 @@ def test_publication_preserves_unrelated_files_and_rolls_back(monkeypatch, tmp_p
             raise OSError("disk full")
         return write(path, content, *args, **kwargs)
     def failing_replace(path, target):
-        if path.name == "new" and failure in ("publish", "interrupt"):
+        if path.parent.name == "new" and path.name == "manifest.json" and failure in ("publish", "interrupt"):
             raise KeyboardInterrupt() if failure == "interrupt" else OSError("rename failed")
         return replace(path, target)
     monkeypatch.setattr(Path, "write_text", failing_write)
@@ -190,13 +191,36 @@ def test_failed_rollback_keeps_recoverable_backup(monkeypatch, tmp_path):
     (out / "transcript.md").write_text("old")
     replace = Path.replace
     def fail(path, target):
-        if path.name in ("new", "previous"):
+        if path.parent.name in ("new", "previous"):
             raise OSError("rename failed")
         return replace(path, target)
     monkeypatch.setattr(Path, "replace", fail)
-    with pytest.raises(RunError, match="предыдущий результат сохранён"):
+    with pytest.raises(RunError, match="предыдущие файлы сохранены"):
         _publish_artifacts(out, {"transcript.md": "new"}, overwrite=True)
     assert next(tmp_path.glob(".out-*/previous/transcript.md")).read_text() == "old"
+
+
+def test_publication_preserves_cwd_and_concurrent_unrelated_edits(monkeypatch, tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "notes.txt").write_text("old notes")
+    fifo = out / "pipe"
+    os.mkfifo(fifo)
+    directory_inode, fifo_inode = out.stat().st_ino, fifo.stat().st_ino
+    monkeypatch.chdir(out)
+    write = Path.write_text
+    def edit_notes(path, content, *args, **kwargs):
+        result = write(path, content, *args, **kwargs)
+        if path.parent.name == "new" and path.name == "manifest.json":
+            write(out / "notes.txt", "edited while publishing")
+            write(out / "new-note.txt", "created while publishing")
+        return result
+    monkeypatch.setattr(Path, "write_text", edit_notes)
+    _publish_artifacts(out, {"transcript.md": "new", "manifest.json": "{}"}, overwrite=True)
+    assert Path.cwd() == out and out.stat().st_ino == directory_inode
+    assert Path("notes.txt").read_text() == "edited while publishing"
+    assert Path("new-note.txt").read_text() == "created while publishing"
+    assert fifo.stat().st_ino == fifo_inode
 
 
 def test_invalid_wav_and_speakers_are_run_errors(tmp_path):
