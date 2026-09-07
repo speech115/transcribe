@@ -4,6 +4,13 @@ __pycache__/
 *.log
 .transcribe-watch.json
 
+# Generated transcription artifacts stay local.
+transcript.md
+transcript.json
+manifest.json
+transcript.srt
+transcript.vtt
+
 # корпус прогонов: личные пути и названия видео, накапливается локально
 docs/research/corpus.jsonl
 

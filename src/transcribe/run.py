@@ -11,11 +11,12 @@ from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Callable
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from .engine import EngineError, FluidAudioEngine
+from .engine import EngineError, FluidAudioEngine, parse_speakers
 
-YT_RE = re.compile(r"(youtube\.com|youtu\.be)", re.I)
 BAD_PATH_CHARS_RE = re.compile(r"[\x00-\x1f/:]+")
+ARTIFACT_NAMES = ("transcript.md", "transcript.json", "manifest.json", "transcript.srt", "transcript.vtt")
 
 
 def safe_folder_name(name: str, fallback: str = "transcript") -> str:
@@ -54,6 +55,7 @@ class RunResult:
     language: str
     workdir: Path | None = None
     subtitle_paths: tuple[Path, ...] = ()
+    diar_error: str | None = None
 
 
 def format_duration(sec: float) -> str:
@@ -94,19 +96,28 @@ def assign_speaker(w_start: float, w_end: float, diar: list, max_nearest_gap: fl
     return nearest
 
 
-def merge_words_to_turns(words: list, diar: list, max_gap: float = 1.5, max_chars: int = 600) -> list[dict]:
+def merge_words_to_turns(words: list, diar: list, max_gap: float = 1.5,
+                         max_chars: int = 600, max_duration: float = float("inf")) -> list[dict]:
     turns = []
+    candidates, cursor, nearest_gap = [], 0, 5.0
+    diar = sorted(diar, key=lambda seg: seg[0])
     for word in words:
-        speaker = assign_speaker(word["start"], word["end"], diar) if diar else None
+        while cursor < len(diar) and diar[cursor][0] <= word["end"] + nearest_gap:
+            candidates.append(diar[cursor])
+            cursor += 1
+        candidates = [seg for seg in candidates if seg[1] >= word["start"] - nearest_gap]
+        speaker = assign_speaker(word["start"], word["end"], candidates, nearest_gap)
+        text = word["text"].strip()
         last = turns[-1] if turns else None
         if (last is not None and last["speaker"] == speaker
                 and word["start"] - last["end"] <= max_gap
-                and len(last["text"]) < max_chars):
-            last["text"] += ("" if last["text"].endswith(" ") else " ") + word["text"].strip()
-            last["end"] = word["end"]
+                and len(last["text"]) + 1 + len(text) <= max_chars
+                and word["end"] - last["start"] <= max_duration):
+            last["text"] += " " + text
+            last["end"] = max(last["end"], word["end"])
         else:
             turns.append({"speaker": speaker, "start": word["start"], "end": word["end"],
-                          "text": word["text"].strip()})
+                          "text": text})
     return turns
 
 
@@ -129,8 +140,8 @@ def _wav_duration(path: Path) -> float:
     try:
         with wave.open(str(path), "rb") as wav:
             return wav.getnframes() / wav.getframerate()
-    except Exception:
-        return 0.0
+    except (OSError, EOFError, wave.Error, ZeroDivisionError) as exc:
+        raise RunError(f"не удалось прочитать WAV {path}: {exc}") from exc
 
 
 def _to_wav16k(src: Path, dst: Path):
@@ -214,112 +225,156 @@ def normalize_formats(formats) -> tuple[str, ...]:
     return normalized
 
 
+def _check_output(out_dir: Path, overwrite: bool) -> None:
+    if out_dir.exists() and not out_dir.is_dir():
+        raise RunError(f"output is not a directory: {out_dir}")
+    for name in ARTIFACT_NAMES:
+        path = out_dir / name
+        if path.is_dir() and not path.is_symlink():
+            raise RunError(f"expected an artifact file, found directory: {path}")
+        if not overwrite and (path.exists() or path.is_symlink()):
+            raise RunError("output already exists; use --overwrite")
+
+
+def _publish_artifacts(out_dir: Path, artifacts: dict[str, str], overwrite: bool) -> None:
+    """Prepare complete artifacts, restoring previous files on publication failure."""
+    _check_output(out_dir, overwrite)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    transaction = Path(tempfile.mkdtemp(prefix=".transcribe-", dir=out_dir))
+    staged, previous = transaction / "new", transaction / "previous"
+    cleanup = True
+    try:
+        staged.mkdir()
+        previous.mkdir()
+        for name, content in artifacts.items():
+            (staged / name).write_text(content, encoding="utf-8")
+        _check_output(out_dir, overwrite)
+        # ponytail: files publish individually; a hard kill leaves recoverable backups.
+        try:
+            for name in ARTIFACT_NAMES:
+                path = out_dir / name
+                if path.exists() or path.is_symlink():
+                    path.replace(previous / name)
+            for name in artifacts:
+                (staged / name).replace(out_dir / name)
+        except BaseException:
+            cleanup = False
+            try:
+                for name in artifacts:
+                    if not (staged / name).exists():
+                        (out_dir / name).unlink(missing_ok=True)
+                for saved in previous.iterdir():
+                    saved.replace(out_dir / saved.name)
+            except OSError as exc:
+                raise RunError(f"не удалось восстановить output; предыдущие файлы сохранены: {previous}") from exc
+            cleanup = True
+            raise
+    finally:
+        if cleanup:
+            shutil.rmtree(transaction, ignore_errors=True)
+
+
 def run(input, *, out: Path | None = None, out_root: Path | None = None,
         speakers: str = "auto", lang: str = "auto", diar_mode: str = "streaming",
         asr_model: str = "v3", keep_tmp: bool = False, formats=(),
         overwrite: bool = False, on_stage: Callable[[str], None] | None = None) -> RunResult:
     """Полный прогон: preflight → prep → asr → диаризация → merge → артефакты."""
-    subtitle_formats = normalize_formats(formats)
-    if not FLUID.exists():
-        raise RunError(f"не найден движок: {FLUID}")
-    if not shutil.which("ffmpeg"):
-        raise RunError("требуется ffmpeg")
-    if out is None and out_root is None:
-        raise RunError("укажите --out или --out-root")
-
-    is_url = "://" in str(input)
-    is_youtube = is_url and YT_RE.search(str(input))
-    if is_url and not is_youtube:
-        raise RunError("поддерживаются локальные файлы и YouTube-ссылки")
-    if not is_url and not Path(input).exists():
-        raise RunError(f"файл не найден: {input}")
-
-    source_path = None if is_youtube else Path(input).resolve()
-
-    workdir = Path(tempfile.mkdtemp(prefix="transcribe_"))
-    timings = {}
-    total_t0 = time.time()
+    workdir = None
     try:
+        parse_speakers(speakers)
+        subtitle_formats = normalize_formats(formats)
+        if not FLUID.is_file():
+            raise RunError(f"не найден движок: {FLUID}")
+        if not shutil.which("ffmpeg"):
+            raise RunError("требуется ffmpeg")
+        if out is None and out_root is None:
+            raise RunError("укажите --out или --out-root")
+        if asr_model not in ("v2", "v3") or diar_mode not in ("streaming", "offline"):
+            raise RunError("неподдерживаемая модель ASR или режим диаризации")
+
+        is_url = "://" in str(input)
+        if is_url:
+            url = urlsplit(str(input))
+            host = url.hostname or ""
+            if url.scheme not in ("http", "https") or not (
+                    host in ("youtube.com", "youtu.be") or host.endswith(".youtube.com")):
+                raise RunError("поддерживаются локальные файлы и YouTube-ссылки")
+        elif not Path(input).is_file():
+            raise RunError(f"файл не найден: {input}")
+        source_path = None if is_url else Path(input).resolve()
+        out_dir = Path(out).expanduser().resolve() if out is not None else None
+        if out_dir is not None:
+            _check_output(out_dir, overwrite)
+
+        workdir = Path(tempfile.mkdtemp(prefix="transcribe_"))
+        timings = {}
+        total_t0 = time.perf_counter()
         if on_stage:
             on_stage("preparing")
-        if is_youtube:
+        if is_url:
             src, title = _fetch_youtube_audio(str(input), workdir)
         else:
-            src = Path(input)
-            title = Path(input).stem
-        out_dir = (Path(out) if out is not None else
-                   unique_dir(Path(out_root) / safe_folder_name(title, "youtube" if is_youtube else "transcript")))
-        if out is not None and not overwrite:
-            standard = (out_dir / "transcript.md", out_dir / "transcript.json", out_dir / "manifest.json")
-            if any(path.exists() for path in standard):
-                raise RunError("output already exists; use --overwrite")
-        out_dir.mkdir(parents=True, exist_ok=True)
+            src, title = Path(input), Path(input).stem
+        if out_dir is None:
+            out_dir = unique_dir(Path(out_root).expanduser().resolve() /
+                                 safe_folder_name(title, "youtube" if is_url else "transcript"))
+        if source_path is not None and source_path.parent == out_dir and source_path.name in ARTIFACT_NAMES:
+            raise RunError("output would overwrite the source file")
         wav = workdir / "audio_16k.wav"
-        t0 = time.time()
+        t0 = time.perf_counter()
         _to_wav16k(src, wav)
-        timings["prep_s"] = round(time.time() - t0, 1)
+        timings["prep_s"] = round(time.perf_counter() - t0, 1)
         duration = _wav_duration(wav)
 
         engine = FluidAudioEngine(binary=FLUID, model=asr_model, diar_mode=diar_mode)
         result = engine.transcribe(wav, lang=lang, speakers=speakers, on_stage=on_stage)
         timings["asr_s"] = round(result.asr_s, 1)
-        timings["diar_s"] = (round(result.diar_s, 1)
-                             if result.diar_s is not None else None)
+        timings["diar_s"] = round(result.diar_s, 1) if result.diar_s is not None else None
         words = result.words
-        n_speakers = max(result.speakers, 1)
+        n_speakers = result.speakers
         multi = n_speakers > 1
-
         turns = merge_words_to_turns(words, result.segments)
 
         generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        meta = {"source": (str(input) if is_youtube else Path(input).name),
-                "source_path": (None if source_path is None else str(source_path)),
-                "duration": duration,
-                "speakers": n_speakers, "language": result.language,
+        meta = {"source": str(input) if is_url else Path(input).name,
+                "source_path": None if source_path is None else str(source_path),
+                "duration": duration, "speakers": n_speakers, "language": result.language,
                 "engine": result.engine, "generated": generated,
                 "subtitle_formats": list(subtitle_formats)}
-
         if on_stage:
             on_stage("writing")
-        (out_dir / "transcript.md").write_text(_render_md(meta, turns, multi))
-        (out_dir / "transcript.json").write_text(json.dumps(
-            {**meta, "turns": turns, "words": words}, ensure_ascii=False, indent=2))
-        for stale_fmt in ("srt", "vtt"):
-            if stale_fmt not in subtitle_formats:
-                (out_dir / f"transcript.{stale_fmt}").unlink(missing_ok=True)
-        subtitle_paths = []
-        for fmt in subtitle_formats:
-            subtitle_path = out_dir / f"transcript.{fmt}"
-            subtitle_path.write_text(_render_subtitles(turns, multi, fmt))
-            subtitle_paths.append(subtitle_path)
-
-        rtf = (round(duration / timings["asr_s"], 1)
-               if duration > 0 and timings["asr_s"] > 0 else None)
-        manifest = {**meta, "out_dir": str(out_dir), "timings_s": timings,
-                    "asr_rtf": rtf, "asr_model": asr_model,
-                    "diar_mode": result.diar_mode,
-                    "speakers_arg": speakers, "words": len(words), "turns": len(turns),
-                    "engine_binary": str(FLUID)}
-        timings["total_s"] = round(time.time() - total_t0, 1)
-        manifest["diarization"] = {
-            "requested": speakers != "off",
-            "status": result.diar_status,
-            "fallback": "single-speaker" if result.diar_status == "failed" else None,
-            "error": result.diar_error,
+        artifacts = {
+            "transcript.md": _render_md(meta, turns, multi),
+            "transcript.json": json.dumps({**meta, "turns": turns, "words": words}, ensure_ascii=False, indent=2),
         }
-        (out_dir / "manifest.json").write_text(json.dumps(
-            manifest, ensure_ascii=False, indent=2))
+        if subtitle_formats:
+            # ponytail: indivisible words retain their timing even if one exceeds the cue limits.
+            cues = merge_words_to_turns(words, result.segments, max_chars=80, max_duration=6.0)
+            for fmt in subtitle_formats:
+                artifacts[f"transcript.{fmt}"] = _render_subtitles(cues, multi, fmt)
 
+        rtf = round(duration / result.asr_s, 1) if duration > 0 and result.asr_s > 0 else None
+        manifest = {**meta, "out_dir": str(out_dir), "timings_s": timings,
+                    "asr_rtf": rtf, "asr_model": asr_model, "diar_mode": result.diar_mode,
+                    "speakers_arg": speakers, "words": len(words), "turns": len(turns),
+                    "engine_binary": str(FLUID), "diarization": {
+                        "requested": speakers != "off", "status": result.diar_status,
+                        "fallback": "single-speaker" if result.diar_status == "failed" else None,
+                        "error": result.diar_error,
+                    }}
+        timings["total_s"] = round(time.perf_counter() - total_t0, 1)
+        artifacts["manifest.json"] = json.dumps(manifest, ensure_ascii=False, indent=2)
+        _publish_artifacts(out_dir, artifacts, overwrite)
         return RunResult(out_dir=out_dir,
                          transcript_md=out_dir / "transcript.md",
                          transcript_json=out_dir / "transcript.json",
                          manifest=out_dir / "manifest.json",
-                         speakers=n_speakers, duration_s=duration,
-                         language=result.language,
-                         workdir=(workdir if keep_tmp else None),
-                         subtitle_paths=tuple(subtitle_paths))
-    except EngineError as exc:
+                         speakers=n_speakers, duration_s=duration, language=result.language,
+                         workdir=workdir if keep_tmp else None,
+                         subtitle_paths=tuple(out_dir / f"transcript.{fmt}" for fmt in subtitle_formats),
+                         diar_error=result.diar_error)
+    except (EngineError, OSError, ValueError) as exc:
         raise RunError(str(exc)) from exc
     finally:
-        if not keep_tmp:
+        if workdir is not None and not keep_tmp:
             shutil.rmtree(workdir, ignore_errors=True)
