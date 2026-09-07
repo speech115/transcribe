@@ -1,6 +1,6 @@
 # transcribe
 
-Local, offline transcription for macOS Apple Silicon. Turn audio/video or a
+Local, offline transcription for macOS 14+ on Apple Silicon. Turn audio/video or a
 YouTube URL into a readable transcript with optional speaker diarization.
 
 ## Install
@@ -30,6 +30,13 @@ diarizes, merges turns, and writes `transcript.md`, `transcript.json`, and
 
 Language and speaker count are automatic by default. Use `--lang`,
 `--speakers`, `--out`, `--out-root`, and `--formats` when needed.
+
+SRT/VTT cues use up to 80 text characters and 6 seconds; a single word keeps
+its original timing. Existing transcript artifacts require `--overwrite`.
+Output is prepared in a sibling directory before publication, with rollback
+on failure. Unrelated files in the output directory are preserved. If the
+process is forcibly killed between directory renames, the previous output
+remains in the sibling `.NAME-*/previous` directory.
 
 ## Privacy
 

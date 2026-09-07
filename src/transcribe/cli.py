@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Local offline transcription CLI."""
 import argparse
-import json
 import sys
 import shutil
 import sysconfig
@@ -23,47 +22,35 @@ def _skill_text() -> str:
         raise RunError(f"installed skill is unavailable at {path}; reinstall the tool") from exc
 
 
-def _writable_dir(path: Path) -> bool:
-    if not path.is_dir():
-        return False
-    try:
-        with tempfile.NamedTemporaryFile(prefix=".transcribe-doctor-", dir=path):
-            return True
-    except OSError:
-        return False
-
-
-def _probe_diarization(binary: Path) -> bool:
+def _probe_diarization(binary: Path) -> None:
     from .engine import FluidAudioEngine
-    try:
-        with tempfile.TemporaryDirectory(prefix="transcribe-doctor-") as tmp:
-            wav_path = Path(tmp) / "probe.wav"
-            with wave.open(str(wav_path), "wb") as wav:
-                wav.setnchannels(1)
-                wav.setsampwidth(2)
-                wav.setframerate(16000)
-                wav.writeframes(b"\0\0" * 8000)
-            FluidAudioEngine(binary=binary)._run_process(wav_path, -1)
-        return True
-    except Exception:
-        return False
+    with tempfile.TemporaryDirectory(prefix="transcribe-doctor-") as tmp:
+        wav_path = Path(tmp) / "probe.wav"
+        with wave.open(str(wav_path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(16000)
+            wav.writeframes(b"\0\0" * 8000)
+        FluidAudioEngine(binary=binary)._run_process(wav_path, -1)
 
 
 def _doctor() -> None:
+    from .engine import EngineError
     from .run import FLUID
-    app_models = Path.home() / "Library" / "Application Support" / "FluidAudio"
-    cli_cache = Path.home() / "Library" / "Caches" / "fluidaudiocli"
     checks = {
         "ffmpeg": bool(shutil.which("ffmpeg")),
         "engine": FLUID.is_file() and bool(shutil.which(str(FLUID))),
-        "models": app_models.is_dir(),
-        "coreml-cache": _writable_dir(app_models) and _writable_dir(cli_cache),
-        "diarization": _probe_diarization(FLUID) if FLUID.is_file() else False,
     }
     for name, value in checks.items():
         print(f"{name}={'ok' if value else 'missing'}")
     if not all(checks.values()):
         raise RunError("preflight failed")
+    try:
+        _probe_diarization(FLUID)
+    except (EngineError, OSError, wave.Error) as exc:
+        print("diarization=failed")
+        raise RunError(f"diarization: {exc}") from exc
+    print("diarization=ok")
 
 
 def _parse_formats(value: str) -> tuple[str, ...]:
@@ -78,10 +65,8 @@ def _print_result(result) -> None:
     print(f"  {result.transcript_md}", file=sys.stderr)
     print(f"  {result.transcript_json}", file=sys.stderr)
     print(f"  {result.manifest}", file=sys.stderr)
-    diarization = (json.loads(result.manifest.read_text()).get("diarization", {})
-                   if result.manifest.exists() else {})
-    if diarization.get("status") == "failed":
-        print(f"  ⚠ diarization failed; saved ASR without speaker labels: {diarization.get('error', 'unknown error')}",
+    if result.diar_error:
+        print(f"  ⚠ diarization failed; saved ASR without speaker labels: {result.diar_error}",
               file=sys.stderr)
     for subtitle_path in result.subtitle_paths:
         print(f"  {subtitle_path}", file=sys.stderr)
@@ -141,19 +126,18 @@ def main(argv: list[str] | None = None):
                     diar_mode=args.diar_mode, asr_model=args.asr_model,
                     keep_tmp=args.keep_tmp, formats=args.formats, overwrite=args.overwrite,
                     on_stage=_stage_progress)
-        except RunError as exc:
+            if sys.stderr.isatty():
+                print("\r\033[K", end="", file=sys.stderr)
+            sys.stdout.write(r.transcript_md.read_text(encoding="utf-8"))
+            _print_result(r)
+        except (RunError, OSError, UnicodeError) as exc:
             print(f"transcribe: error: {source}: {exc}", file=sys.stderr)
             failed = True
             continue
-
-        if sys.stderr.isatty():
-            print("\r\033[K", end="", file=sys.stderr)
-        sys.stdout.write(r.transcript_md.read_text())
-        _print_result(r)
 
     if failed:
         sys.exit(1)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

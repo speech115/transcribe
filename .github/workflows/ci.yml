@@ -46,7 +46,7 @@ jobs:
           python -m pip wheel --no-deps . -w /tmp/transcribe-wheel
           wheel=$(find /tmp/transcribe-wheel -name '*.whl' -print -quit)
           case "$wheel" in
-            *-py3-none-macosx_*_arm64.whl) ;;
+            *-py3-none-macosx_14_0_arm64.whl) ;;
             *) echo "unexpected wheel: $wheel"; exit 1 ;;
           esac
       - name: Run tests

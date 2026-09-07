@@ -1,15 +1,11 @@
-"""Движковый шов: единственный модуль, знающий, как разговаривать с FluidAudio.
-
-Порт Engine.transcribe() — единственный публичный интерфейс. Движковые опции
-(model, diar_mode) живут в конструкторе адаптера. За швом: командный контракт
-subprocess, обе JSON-схемы, релейблинг S1..Sn, политика языка.
-"""
+"""Run local FluidAudio and normalize its ASR and diarization output."""
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
-
+import json
+import math
+import tempfile
 import time
-
 import re
 import subprocess
 
@@ -22,17 +18,25 @@ def detect_language(text: str) -> str:
         return "mixed"
     if cyr / total >= .5:
         return "ru"
-    if lat / total >= .5:
-        return "en"
-    return "auto"
+    return "en"
 
 class EngineError(Exception):
-    """Провал прогона. stage: "asr" | "diar" | "parse"."""
+    """Провал прогона. stage: "input" | "asr" | "diar" | "parse"."""
 
     def __init__(self, stage: str, reason: str):
         super().__init__(f"[{stage}] {reason}")
         self.stage = stage
         self.reason = reason
+
+
+def parse_speakers(value: str) -> int | None:
+    if value == "auto":
+        return -1
+    if value == "off":
+        return None
+    if isinstance(value, str) and re.fullmatch(r"[0-9]{1,9}", value) and int(value) > 0:
+        return int(value)
+    raise EngineError("input", "--speakers: укажите auto, off или положительное целое число")
 
 
 @dataclass(frozen=True)
@@ -41,7 +45,6 @@ class Transcript:
     segments: list = field(default_factory=list)     # [(start, end, "S<n>", quality)]
     speakers: int = 1
     language: str = "auto"
-    text: str = ""
     engine: str = ""
     asr_s: float = 0.0
     diar_s: float | None = None
@@ -62,11 +65,12 @@ class FluidAudioEngine:
     def transcribe(self, wav: Path, *, lang: str = "auto",
                    speakers: str = "auto",
                    on_stage: Callable[[str], None] | None = None) -> Transcript:
+        num_speakers = parse_speakers(speakers)
         if on_stage:
             on_stage("asr")
-        t0_asr = time.time()
+        t0_asr = time.perf_counter()
         asr_data = self._run_transcribe(wav, lang)
-        asr_s = time.time() - t0_asr
+        asr_s = time.perf_counter() - t0_asr
         words = _normalize_words(asr_data)
         if not words:
             raise EngineError("asr", "ASR вернул пустой результат")
@@ -74,72 +78,58 @@ class FluidAudioEngine:
         segments = []
         diar_s = None
         diar_status, diar_error = "skipped", None
-        if speakers != "off":
+        if num_speakers is not None:
             if on_stage:
                 on_stage("diar")
-            t0_diar = time.time()
+            t0_diar = time.perf_counter()
             try:
-                diar_data = self._run_process(wav, int(speakers) if speakers.isdigit() else -1)
+                diar_data = self._run_process(wav, num_speakers)
                 segments, n_speakers = _normalize_diar(diar_data)
                 diar_status = "success"
             except EngineError as exc:
-                if not speakers.isdigit():
+                if num_speakers == -1:
                     n_speakers = 1
                     diar_status = "failed"
                     diar_error = " ".join(exc.reason.split())[:500]
                 else:
                     raise
-            diar_s = time.time() - t0_diar
+            diar_s = time.perf_counter() - t0_diar
         else:
             n_speakers = 0
         n_speakers = max(n_speakers, 1)
 
-        lang_out = _resolve_language(lang, asr_data.get("language"), asr_data.get("text") or " ".join(w["text"] for w in words))
+        lang_out = _resolve_language(lang, asr_data.get("language"), " ".join(w["text"] for w in words))
         multi = n_speakers > 1
         engine = (f"fluidaudio-parakeet-{self.model} + "
                   f"pyannote-{self.diar_mode}" if multi else f"fluidaudio-parakeet-{self.model}")
 
         return Transcript(words=words, segments=segments, speakers=n_speakers,
-                          language=lang_out, text=asr_data.get("text") or "",
+                          language=lang_out,
                           engine=engine,
                           asr_s=asr_s, diar_s=diar_s,
                           diar_mode=(self.diar_mode if speakers != "off" else None),
                           diar_status=diar_status, diar_error=diar_error)
 
     def _run_transcribe(self, wav: Path, lang: str) -> dict:
-        out_json = _tmp_json("asr")
-        try:
-            cmd = [str(self.binary), "transcribe", str(wav), "--word-timestamps", "--model-version", self.model, "--output-json", str(out_json)]
-            if lang != "auto": cmd += ["--language", lang]
-            _run(cmd, "asr")
-            return _read_json(out_json)
-        finally:
-            out_json.unlink(missing_ok=True)
+        cmd = [str(self.binary), "transcribe", str(wav), "--word-timestamps", "--model-version", self.model]
+        if lang != "auto":
+            cmd += ["--language", lang]
+        return _run_json(cmd, "asr", "--output-json")
 
     def _run_process(self, wav: Path, num: int) -> dict:
-        out_json = _tmp_json("diar")
-        try:
-            cmd = [str(self.binary), "process", str(wav), "--mode", self.diar_mode, "--output", str(out_json)]
-            if num > 0:
-                cmd += (["--num-clusters", str(num)] if self.diar_mode == "streaming" else ["--num-speakers", str(num)])
-            _run(cmd, "diar")
-            return _read_json(out_json)
-        finally:
-            out_json.unlink(missing_ok=True)
+        cmd = [str(self.binary), "process", str(wav), "--mode", self.diar_mode]
+        if num > 0:
+            cmd += (["--num-clusters", str(num)] if self.diar_mode == "streaming" else ["--num-speakers", str(num)])
+        return _run_json(cmd, "diar", "--output")
 
 
-def _tmp_json(kind: str) -> Path:
-    import tempfile
-    with tempfile.NamedTemporaryFile(prefix=f"engine_{kind}_", suffix=".json", delete=False) as tmp:
-        return Path(tmp.name)
-
-
-def _read_json(path: Path) -> dict:
-    import json
+def _run_json(cmd: list[str], stage: str, output_flag: str) -> dict:
     try:
-        data = json.loads(path.read_text())
-    except Exception as exc:
-        raise EngineError("parse", f"кривой ответ движка: {exc}") from exc
+        with tempfile.NamedTemporaryFile(prefix=f"engine_{stage}_", suffix=".json") as tmp:
+            _run([*cmd, output_flag, tmp.name], stage)
+            data = json.loads(Path(tmp.name).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise EngineError("parse", f"не удалось прочитать ответ движка: {exc}") from exc
     if not isinstance(data, dict):
         raise EngineError("parse", "ответ движка не JSON-объект")
     return data
@@ -154,34 +144,37 @@ def _resolve_language(lang: str, engine_lang, text: str) -> str:
 
 
 def _normalize_words(asr_data: dict) -> list:
-    words = []
-    for w in asr_data.get("wordTimings", []):
-        words.append({
-            "start": float(w.get("startTime", 0.0)),
-            "end": float(w.get("endTime", 0.0)),
-            "text": w.get("word", ""),
-        })
-    return words
+    try:
+        words = [{"start": float(w["startTime"]), "end": float(w["endTime"]), "text": w["word"]}
+                 for w in asr_data["wordTimings"]]
+        for w in words:
+            if not (math.isfinite(w["start"]) and math.isfinite(w["end"])
+                    and 0 <= w["start"] <= w["end"]
+                    and isinstance(w["text"], str) and w["text"].strip()):
+                raise ValueError("некорректные таймкоды или текст слова")
+        return sorted(words, key=lambda w: w["start"])
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise EngineError("parse", f"некорректные wordTimings: {exc}") from exc
 
 
 def _normalize_diar(diar_data: dict) -> tuple:
-    raw = []
-    for s in diar_data.get("segments", []):
-        raw.append((
-            float(s.get("startTimeSeconds", 0.0)),
-            float(s.get("endTimeSeconds", 0.0)),
-            str(s.get("speakerId", "")),
-            float(s.get("qualityScore", 1.0)),
-        ))
+    try:
+        raw = [(float(s["startTimeSeconds"]), float(s["endTimeSeconds"]),
+                s["speakerId"], float(s.get("qualityScore", 1.0))) for s in diar_data["segments"]]
+        for start, end, speaker, quality in raw:
+            if not (all(math.isfinite(v) for v in (start, end, quality)) and 0 <= start <= end
+                    and isinstance(speaker, (str, int)) and str(speaker).strip()):
+                raise ValueError("некорректный сегмент спикера")
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise EngineError("parse", f"некорректные segments: {exc}") from exc
     raw.sort(key=lambda t: t[0])
-    label_map, n = {}, 0
+    label_map = {}
     relabeled = []
     for st, en, spk, quality in raw:
         if spk not in label_map:
-            n += 1
-            label_map[spk] = f"S{n}"
+            label_map[spk] = f"S{len(label_map) + 1}"
         relabeled.append((st, en, label_map[spk], quality))
-    return relabeled, n
+    return relabeled, len(label_map)
 
 
 def _run(cmd: list[str], stage: str) -> None:

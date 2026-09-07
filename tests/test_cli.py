@@ -6,17 +6,16 @@ import transcribe.cli as cli
 from transcribe.run import RunError, RunResult
 
 
-def test_cli_batch_continues_after_error(monkeypatch):
+def test_cli_batch_continues_after_error(monkeypatch, tmp_path):
     calls = []
 
     def fake_run(source, **kwargs):
         calls.append(source)
         if source == "bad.wav":
             raise RunError("файл не найден")
-        Path("/tmp/good").mkdir(exist_ok=True)
-        Path("/tmp/good/transcript.md").write_text("hello\n")
-        return RunResult(Path("/tmp/good"), Path("/tmp/good/transcript.md"),
-                         Path("/tmp/good/transcript.json"), Path("/tmp/good/manifest.json"), 1, 2, "en")
+        (tmp_path / "transcript.md").write_text("hello\n")
+        return RunResult(tmp_path, tmp_path / "transcript.md",
+                         tmp_path / "transcript.json", tmp_path / "manifest.json", 1, 2, "en")
 
     monkeypatch.setattr(cli, "run", fake_run)
     monkeypatch.setattr(sys, "argv", ["transcribe", "good.wav", "bad.wav"])
@@ -71,8 +70,21 @@ def test_doctor_command_reports_preflight(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr("transcribe.run.FLUID", tmp_path / "engine")
     monkeypatch.setattr(cli, "_probe_diarization", lambda binary: True)
     monkeypatch.setattr(cli.Path, "home", classmethod(lambda cls: tmp_path))
-    (tmp_path / "Library/Application Support/FluidAudio").mkdir(parents=True)
-    (tmp_path / "Library/Caches/fluidaudiocli").mkdir(parents=True)
     (tmp_path / "engine").write_text("engine")
     assert cli.main(["doctor"]) == 0
-    assert "ffmpeg=ok" in capsys.readouterr().out
+    assert "diarization=ok" in capsys.readouterr().out
+
+
+def test_doctor_preserves_diarization_error(monkeypatch, capsys, tmp_path):
+    from transcribe.engine import EngineError, FluidAudioEngine
+    binary = tmp_path / "engine"
+    binary.touch()
+    monkeypatch.setattr("transcribe.run.FLUID", binary)
+    monkeypatch.setattr("shutil.which", lambda name: "/synthetic/tool")
+    def fail(*args):
+        raise EngineError("diar", "CoreML: permission denied")
+    monkeypatch.setattr(FluidAudioEngine, "_run_process", fail)
+    assert cli.main(["doctor"]) == 2
+    captured = capsys.readouterr()
+    assert "diarization=failed" in captured.out
+    assert "CoreML: permission denied" in captured.err
