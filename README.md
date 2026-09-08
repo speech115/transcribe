@@ -28,6 +28,8 @@ The command prepares audio, runs vendored FluidAudio/Parakeet, optionally
 diarizes, merges turns, and writes `transcript.md`, `transcript.json`, and
 `manifest.json` (plus requested SRT/VTT subtitles).
 
+Streaming diarization runs alongside ASR. Offline diarization runs after ASR.
+
 Language and speaker count are automatic by default. Use `--lang`,
 `--speakers`, `--out`, `--out-root`, and `--formats` when needed.
 
