@@ -1,6 +1,8 @@
 """Run local FluidAudio and normalize its ASR and diarization output."""
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Event
 from typing import Callable
 import json
 import math
@@ -66,36 +68,50 @@ class FluidAudioEngine:
                    speakers: str = "auto",
                    on_stage: Callable[[str], None] | None = None) -> Transcript:
         num_speakers = parse_speakers(speakers)
-        if on_stage:
-            on_stage("asr")
-        t0_asr = time.perf_counter()
-        asr_data = self._run_transcribe(wav, lang)
-        asr_s = time.perf_counter() - t0_asr
-        words = _normalize_words(asr_data)
-        if not words:
-            raise EngineError("asr", "ASR вернул пустой результат")
-
-        segments = []
         diar_s = None
-        diar_status, diar_error = "skipped", None
-        if num_speakers is not None:
-            if on_stage:
-                on_stage("diar")
-            t0_diar = time.perf_counter()
+        parallel = num_speakers is not None and self.diar_mode == "streaming"
+        cancel = Event()
+
+        def diarize():
+            nonlocal diar_s
+            started = time.perf_counter()
             try:
-                diar_data = self._run_process(wav, num_speakers)
-                segments, n_speakers = _normalize_diar(diar_data)
-                diar_status = "success"
-            except EngineError as exc:
-                if num_speakers == -1:
-                    n_speakers = 1
-                    diar_status = "failed"
-                    diar_error = " ".join(exc.reason.split())[:500]
+                return self._run_process(wav, num_speakers, cancel=cancel if parallel else None)
+            finally:
+                diar_s = time.perf_counter() - started
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            try:
+                future = pool.submit(diarize) if parallel else None
+                if on_stage:
+                    on_stage("asr")
+                t0_asr = time.perf_counter()
+                asr_data = self._run_transcribe(wav, lang)
+                asr_s = time.perf_counter() - t0_asr
+                words = _normalize_words(asr_data)
+                if not words:
+                    raise EngineError("asr", "ASR вернул пустой результат")
+
+                segments = []
+                diar_status, diar_error = "skipped", None
+                if num_speakers is not None:
+                    if on_stage and (future is None or not future.done()):
+                        on_stage("diar")
+                    try:
+                        diar_data = future.result() if future is not None else diarize()
+                        segments, n_speakers = _normalize_diar(diar_data)
+                        diar_status = "success"
+                    except EngineError as exc:
+                        if num_speakers == -1:
+                            n_speakers = 1
+                            diar_status = "failed"
+                            diar_error = " ".join(exc.reason.split())[:500]
+                        else:
+                            raise
                 else:
-                    raise
-            diar_s = time.perf_counter() - t0_diar
-        else:
-            n_speakers = 0
+                    n_speakers = 0
+            finally:
+                cancel.set()
         n_speakers = max(n_speakers, 1)
 
         lang_out = _resolve_language(lang, asr_data.get("language"), " ".join(w["text"] for w in words))
@@ -116,17 +132,17 @@ class FluidAudioEngine:
             cmd += ["--language", lang]
         return _run_json(cmd, "asr", "--output-json")
 
-    def _run_process(self, wav: Path, num: int) -> dict:
+    def _run_process(self, wav: Path, num: int, *, cancel: Event | None = None) -> dict:
         cmd = [str(self.binary), "process", str(wav), "--mode", self.diar_mode]
         if num > 0:
             cmd += (["--num-clusters", str(num)] if self.diar_mode == "streaming" else ["--num-speakers", str(num)])
-        return _run_json(cmd, "diar", "--output")
+        return _run_json(cmd, "diar", "--output", cancel=cancel)
 
 
-def _run_json(cmd: list[str], stage: str, output_flag: str) -> dict:
+def _run_json(cmd: list[str], stage: str, output_flag: str, *, cancel: Event | None = None) -> dict:
     try:
         with tempfile.NamedTemporaryFile(prefix=f"engine_{stage}_", suffix=".json") as tmp:
-            _run([*cmd, output_flag, tmp.name], stage)
+            _run([*cmd, output_flag, tmp.name], stage, cancel=cancel)
             data = json.loads(Path(tmp.name).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as exc:
         raise EngineError("parse", f"не удалось прочитать ответ движка: {exc}") from exc
@@ -177,9 +193,27 @@ def _normalize_diar(diar_data: dict) -> tuple:
     return relabeled, len(label_map)
 
 
-def _run(cmd: list[str], stage: str) -> None:
+def _run(cmd: list[str], stage: str, *, cancel: Event | None = None) -> None:
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        if cancel is None:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            return
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+            try:
+                while True:
+                    if cancel.is_set():
+                        raise EngineError(stage, "обработка отменена")
+                    try:
+                        stdout, stderr = process.communicate(timeout=0.1)
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+            except BaseException:
+                process.kill()
+                process.communicate()
+                raise
+            if process.returncode:
+                raise subprocess.CalledProcessError(process.returncode, cmd, output=stdout, stderr=stderr)
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
         raise EngineError(stage, detail or f"FluidAudio завершился с кодом {exc.returncode}") from exc

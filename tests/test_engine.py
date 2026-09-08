@@ -6,14 +6,21 @@ import pytest
 from transcribe.engine import EngineError, FluidAudioEngine, _normalize_words, _normalize_diar
 
 
-def test_engine_reads_asr_and_diar(monkeypatch, tmp_path):
+@pytest.mark.parametrize("speakers, mode, expected", [
+    ("off", "streaming", ["transcribe"]), ("auto", "offline", ["transcribe", "process"])])
+def test_engine_reads_asr_and_diar(monkeypatch, tmp_path, speakers, mode, expected):
+    calls = []
     def fake_run(cmd, **kwargs):
+        calls.append(cmd[1])
         out = Path(cmd[cmd.index("--output-json" if "transcribe" in cmd else "--output") + 1])
         out.write_text(json.dumps({"wordTimings": [{"startTime": 0, "endTime": 1, "word": "hello"}], "text": "hello"}
                                   if "transcribe" in cmd else {"segments": []}))
     monkeypatch.setattr("subprocess.run", fake_run)
-    tr = FluidAudioEngine(binary=Path("engine")).transcribe(tmp_path / "in.wav", speakers="off")
+    tr = FluidAudioEngine(binary=Path("engine"), diar_mode=mode).transcribe(
+        tmp_path / "in.wav", speakers=speakers)
     assert tr.words[0]["text"] == "hello"
+    assert calls == expected
+    assert tr.diar_status == ("skipped" if speakers == "off" else "success")
 
 
 def test_engine_reports_subprocess_failure(monkeypatch):
@@ -33,7 +40,7 @@ def test_auto_diarization_failure_returns_asr_once(monkeypatch, tmp_path):
         calls["asr"] += 1
         return {"wordTimings": [{"startTime": 0, "endTime": 1, "word": "hello"}], "text": "hello"}
 
-    def diar(wav, num):
+    def diar(wav, num, **kwargs):
         calls["diar"] += 1
         raise EngineError("diar", "CoreML boom")
 
@@ -49,7 +56,7 @@ def test_explicit_diarization_failure_remains_fatal(monkeypatch, tmp_path):
     engine = FluidAudioEngine(binary=Path("engine"))
     monkeypatch.setattr(engine, "_run_transcribe", lambda wav, lang: {
         "wordTimings": [{"startTime": 0, "endTime": 1, "word": "hello"}], "text": "hello"})
-    monkeypatch.setattr(engine, "_run_process", lambda wav, num: (_ for _ in ()).throw(
+    monkeypatch.setattr(engine, "_run_process", lambda wav, num, **kwargs: (_ for _ in ()).throw(
         EngineError("diar", "CoreML boom")))
     with pytest.raises(EngineError, match="CoreML boom"):
         engine.transcribe(tmp_path / "in.wav", speakers="2")
@@ -78,7 +85,7 @@ def test_malformed_diarization_uses_auto_fallback(monkeypatch, tmp_path):
     engine = FluidAudioEngine(binary=Path("engine"))
     monkeypatch.setattr(engine, "_run_transcribe", lambda *args: {
         "wordTimings": [{"startTime": 0, "endTime": 1, "word": "hello"}]})
-    monkeypatch.setattr(engine, "_run_process", lambda *args: {"segments": [{"startTimeSeconds": None}]})
+    monkeypatch.setattr(engine, "_run_process", lambda *args, **kwargs: {"segments": [{"startTimeSeconds": None}]})
     result = engine.transcribe(tmp_path / "in.wav", speakers="auto")
     assert result.words and result.diar_status == "failed"
     assert "segments" in result.diar_error
